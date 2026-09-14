@@ -1,0 +1,19 @@
+[Unit]
+Description=TORG Telegram bot (ETP.Adilet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/var/www/torg
+Environment=NODE_ENV=production
+Environment=PATH=/usr/bin:/usr/local/bin
+EnvironmentFile=/var/www/torg/.env
+ExecStart=/usr/bin/npx tsx src/index.ts
+Restart=always
+RestartSec=5
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
