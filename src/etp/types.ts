@@ -30,6 +30,7 @@ export interface TradeListItem {
   timeToFinish?: string;
   lots: TradeListLot[];
   currencyCode?: string;
+  images?: Array<{ name: string; href: string; thumbnail?: string; type?: string }>;
 }
 
 export interface TradeListResponse {
@@ -50,7 +51,8 @@ export interface TradeDetailLot {
   assurancePercent?: number;
   assuranceAmount?: number;
   marketPrice?: number;
-  photos: Array<{ name: string; href: string }>;
+  tradeStepPercent?: number;
+  photos: Array<{ name: string; href: string; type?: string }>;
 }
 
 export interface TradeDetail {
@@ -66,5 +68,22 @@ export interface TradeDetail {
   bidAssuranceTerms?: string;
   lots: TradeDetailLot[];
   attachments: Array<{ name: string; href: string; size?: number }>;
+  bidSubmissionEndDate?: number;
+  tradeStartDate?: number;
   url: string;
+}
+
+export interface DownloadedFile {
+  buffer: Buffer;
+  name: string;
+  contentType: string;
+}
+
+export interface ProtocolResult {
+  salePrice?: number;
+  startPrice?: number;
+  winner?: string;
+  soldAt?: string;
+  note?: string;
+  file: DownloadedFile;
 }

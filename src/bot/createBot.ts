@@ -1,9 +1,10 @@
 import { Bot, GrammyError, HttpError } from "grammy";
 import { config } from "../config.js";
 import { ETP_ADILET } from "../etp/constants.js";
-import { getTradeDetail, listTrades, searchTrades, tradePublicUrl } from "../etp/client.js";
-import { formatSearchHeader, formatTradeCard, formatTradeDetail } from "../etp/messages.js";
+import { getTradeDetail, listTrades, searchTradesPage, tradePublicUrl } from "../etp/client.js";
+import { formatCompletedSearchHeader, formatSearchHeader } from "../etp/messages.js";
 import { escapeHtml } from "../etp/format.js";
+import { sendCompletedTrade, sendTradeDetailView, sendTradePreview } from "./sendMedia.js";
 import { addWatch, listWatched, removeWatch } from "../storage/watchlist.js";
 
 function extractArg(text: string | undefined): string {
@@ -45,6 +46,7 @@ export function createBot(token: string): Bot {
         "Команды:",
         "/search — свежие лоты (приём заявок)",
         "/search hyundai — поиск по тексту в текущих лотах",
+        "/searchdone Camry 2006 — состоявшиеся торги, фото и цена продажи из выписки",
         "/lot 113333229 — карточка торга по id или ссылке",
         "/watch 113333229 — добавить в избранное",
         "/watching — список избранного",
@@ -64,6 +66,8 @@ export function createBot(token: string): Bot {
         ETP_ADILET.commission,
         `Доступ: ${ETP_ADILET.needs}`,
         "",
+        "Команды: /search, /searchdone Camry 2006, /lot, /watch, /watching, /unwatch.",
+        "",
         "Важно: бот читает публичные данные площадки. Подача заявок и ЭЦП — только на сайте.",
         "",
         `Каталог: ${ETP_ADILET.tradesUrl}`,
@@ -78,17 +82,14 @@ export function createBot(token: string): Bot {
 
     try {
       if (query) {
-        const items = await searchTrades(query, { limit: 8, maxPages: 8 });
-        if (items.length === 0) {
-          await ctx.reply("Ничего не нашёл в первых страницах приёма заявок. Попробуй другое слово или /lot <id>.");
+        const found = await searchTradesPage(query, { limit: 8 });
+        if (found.items.length === 0) {
+          await ctx.reply("Ничего не нашёл в текущих лотах (приём заявок). Попробуй другое слово, /searchdone или /lot <id>.");
           return;
         }
-        await ctx.reply(formatSearchHeader(query, items.length), { parse_mode: "HTML" });
-        for (const item of items) {
-          await ctx.reply(formatTradeCard(item), {
-            parse_mode: "HTML",
-            link_preview_options: { is_disabled: true },
-          });
+        await ctx.reply(formatSearchHeader(query, found.items.length, found.total), { parse_mode: "HTML" });
+        for (const item of found.items) {
+          await sendTradePreview(ctx, item);
         }
         return;
       }
@@ -96,14 +97,45 @@ export function createBot(token: string): Bot {
       const page = await listTrades({ skipped: 0, limit: 8 });
       await ctx.reply(formatSearchHeader("", page.items.length, page.total), { parse_mode: "HTML" });
       for (const item of page.items) {
-        await ctx.reply(formatTradeCard(item), {
-          parse_mode: "HTML",
-          link_preview_options: { is_disabled: true },
-        });
+        await sendTradePreview(ctx, item);
       }
     } catch (error) {
       console.error(error);
       await ctx.reply("Не удалось получить список с ETP.Adilet. Попробуй позже.");
+    }
+  });
+
+  bot.command("searchdone", async (ctx) => {
+    const query = extractArg(ctx.message?.text);
+    if (!query) {
+      await ctx.reply("Укажи запрос, например:\n/searchdone Camry 2006\nИщу только состоявшиеся торги, фото и цену продажи из выписки.");
+      return;
+    }
+
+    await ctx.reply(`Ищу состоявшиеся торги «${query}»… Может занять до минуты.`);
+    try {
+      const page = await searchTradesPage(query, { limit: 5, processStatuses: ["COMPLETED"] });
+      if (page.items.length === 0) {
+        await ctx.reply("Среди состоявшихся торгов ничего не нашёл. Попробуй другое слово.");
+        return;
+      }
+      await ctx.reply(formatCompletedSearchHeader(query, page.items.length, page.total), {
+        parse_mode: "HTML",
+      });
+      for (const item of page.items) {
+        try {
+          await sendCompletedTrade(ctx, item);
+        } catch (error) {
+          console.error(error);
+          await ctx.reply(`Не разобрал торг ${item.id}. Открой вручную: ${tradePublicUrl(item.id)}`);
+        }
+      }
+      if (page.total > page.items.length) {
+        await ctx.reply(`Это первые ${page.items.length} из ${page.total}. Уточни модель/год, если нужно сузить.`);
+      }
+    } catch (error) {
+      console.error(error);
+      await ctx.reply("Не удалось получить состоявшиеся торги. Попробуй позже.");
     }
   });
 
@@ -118,10 +150,7 @@ export function createBot(token: string): Bot {
     await ctx.reply(`Открываю торг ${id}…`);
     try {
       const detail = await getTradeDetail(id);
-      await ctx.reply(formatTradeDetail(detail), {
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-      });
+      await sendTradeDetailView(ctx, detail);
     } catch (error) {
       console.error(error);
       await ctx.reply(`Не нашёл торг ${id}. Проверь id или открой вручную: ${tradePublicUrl(id)}`);
