@@ -21,3 +21,9 @@ export const TRADE_STATUSES = {
 } as const;
 
 export type TradeStatusCode = keyof typeof TRADE_STATUSES;
+
+/** /search: только эти регионы. /searchdone — все. */
+export const ACTIVE_SEARCH_REGIONS = {
+  ids: ["100806670", "100806587"],
+  label: "г. Астана и Павлодарская область",
+} as const;

@@ -86,6 +86,80 @@ export function formatSearchHeader(query: string, count: number, totalHint?: num
   return `Активные торги (приём заявок): показано ${count}`;
 }
 
+function shortLotTitle(title: string): string {
+  return truncate(
+    title
+      .replace(/\s+/g, " ")
+      .replace(/^Объект:\s*/i, "")
+      .replace(/^Автотранспортное\s+средство\s*/i, "")
+      .replace(/^Легковые автомобили,?\s*/i, "")
+      .trim(),
+    72,
+  );
+}
+
+export function formatSearchTable(
+  query: string,
+  items: TradeListItem[],
+  total: number,
+  regionNote: string,
+): string {
+  const q = query.trim();
+  const lines = [
+    q ? `<b>Поиск «${escapeHtml(q)}»</b>` : "<b>Свежие лоты</b>",
+    `${escapeHtml(regionNote)} · приём заявок · только на понижение`,
+    `Показано ${items.length}`,
+    "Фото и карточка: /lot &lt;id&gt;",
+    "",
+  ];
+
+  items.forEach((item, i) => {
+    const price = item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
+    lines.push(
+      `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
+      `   ${escapeHtml(item.region || "—")} · <b>${formatMoney(price)}</b>`,
+      `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id}`,
+      "",
+    );
+  });
+
+  return lines.join("\n").trim();
+}
+
+export type CompletedTableRow = {
+  item: TradeListItem;
+  start?: number;
+  sale?: number | null;
+  pct?: number | null;
+};
+
+export function formatCompletedTable(query: string, rows: CompletedTableRow[], total: number): string {
+  const lines = [
+    `<b>Состоявшиеся «${escapeHtml(query)}»</b> · все регионы · только на понижение`,
+    `Показано ${rows.length}. Цена продажи — из выписки.`,
+    "Фото и выписка: /lot &lt;id&gt;",
+    "",
+  ];
+
+  rows.forEach((row, i) => {
+    const { item, start, sale, pct } = row;
+    const saleLine =
+      sale != null && pct != null
+        ? `ушла <b>${formatMoney(sale)}</b> (${pct}% от старта)`
+        : sale != null
+          ? `ушла <b>${formatMoney(sale)}</b>`
+          : "цену в выписке не разобрал";
+    lines.push(
+      `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
+      `   ${escapeHtml(item.region || "—")} · старт ${formatMoney(start ?? item.initialContractPrice)} · ${saleLine}`,
+      `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id}`,
+      "",
+    );
+  });
+
+  return lines.join("\n").trim();
+}
+
 export function formatCompletedSearchHeader(query: string, shown: number, total: number): string {
   return [
     `Состоявшиеся торги по «${escapeHtml(query)}»: показано ${shown} из ${total}.`,

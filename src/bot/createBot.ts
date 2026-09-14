@@ -1,10 +1,10 @@
 import { Bot, GrammyError, HttpError } from "grammy";
 import { config } from "../config.js";
-import { ETP_ADILET } from "../etp/constants.js";
-import { getTradeDetail, listTrades, searchTradesPage, tradePublicUrl } from "../etp/client.js";
-import { formatCompletedSearchHeader, formatSearchHeader } from "../etp/messages.js";
+import { ETP_ADILET, ACTIVE_SEARCH_REGIONS } from "../etp/constants.js";
+import { getTradeDetail, loadProtocolResult, searchTradesPage, tradePublicUrl } from "../etp/client.js";
+import { formatCompletedTable, formatSearchTable, type CompletedTableRow } from "../etp/messages.js";
 import { escapeHtml } from "../etp/format.js";
-import { sendCompletedTrade, sendTradeDetailView, sendTradePreview } from "./sendMedia.js";
+import { sendTradeDetailView } from "./sendMedia.js";
 import { addWatch, listWatched, removeWatch } from "../storage/watchlist.js";
 
 function extractArg(text: string | undefined): string {
@@ -45,9 +45,9 @@ export function createBot(token: string): Bot {
         "",
         "Команды:",
         "/search — свежие лоты (приём заявок)",
-        "/search hyundai — поиск по тексту в текущих лотах",
-        "/searchdone Camry 2006 — состоявшиеся торги, фото и цена продажи из выписки",
-        "/lot 113333229 — карточка торга по id или ссылке",
+        "/search hyundai — таблица: Астана и Павлодар, только на понижение",
+        "/searchdone Camry 2006 — состоявшиеся, все регионы, только на понижение",
+        "/lot 113333229 — фото, выписка и карточка одного торга",
         "/watch 113333229 — добавить в избранное",
         "/watching — список избранного",
         "/unwatch 113333229 — убрать из избранного",
@@ -66,7 +66,10 @@ export function createBot(token: string): Bot {
         ETP_ADILET.commission,
         `Доступ: ${ETP_ADILET.needs}`,
         "",
-        "Команды: /search, /searchdone Camry 2006, /lot, /watch, /watching, /unwatch.",
+        "Команды: /search hyundai, /searchdone Camry 2006, /lot, /watch.",
+        "/search — Астана и Павлодар, только на понижение, одной таблицей.",
+        "/searchdone — состоявшиеся, все регионы, только на понижение, одной таблицей.",
+        "/lot — фото и выписка по одному лоту.",
         "",
         "Важно: бот читает публичные данные площадки. Подача заявок и ЭЦП — только на сайте.",
         "",
@@ -78,27 +81,26 @@ export function createBot(token: string): Bot {
 
   bot.command("search", async (ctx) => {
     const query = extractArg(ctx.message?.text);
-    await ctx.reply(query ? `Ищу «${query}»…` : "Загружаю актуальные лоты…");
+    await ctx.reply(query ? `Ищу «${query}» в Астане и Павлодаре…` : "Загружаю лоты по Астане и Павлодару…");
 
     try {
-      if (query) {
-        const found = await searchTradesPage(query, { limit: 8 });
-        if (found.items.length === 0) {
-          await ctx.reply("Ничего не нашёл в текущих лотах (приём заявок). Попробуй другое слово, /searchdone или /lot <id>.");
-          return;
-        }
-        await ctx.reply(formatSearchHeader(query, found.items.length, found.total), { parse_mode: "HTML" });
-        for (const item of found.items) {
-          await sendTradePreview(ctx, item);
-        }
+      const found = await searchTradesPage(query, {
+        limit: 12,
+        destinationRegions: [...ACTIVE_SEARCH_REGIONS.ids],
+        onlyAucDown: true,
+      });
+      if (found.items.length === 0) {
+        await ctx.reply(
+          query
+            ? `В Астане и Павлодаре по «${query}» нет лотов на понижение (приём заявок).`
+            : "В Астане и Павлодаре сейчас нет лотов на понижение (приём заявок).",
+        );
         return;
       }
-
-      const page = await listTrades({ skipped: 0, limit: 8 });
-      await ctx.reply(formatSearchHeader("", page.items.length, page.total), { parse_mode: "HTML" });
-      for (const item of page.items) {
-        await sendTradePreview(ctx, item);
-      }
+      await ctx.reply(formatSearchTable(query, found.items, found.total, ACTIVE_SEARCH_REGIONS.label), {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
     } catch (error) {
       console.error(error);
       await ctx.reply("Не удалось получить список с ETP.Adilet. Попробуй позже.");
@@ -108,31 +110,41 @@ export function createBot(token: string): Bot {
   bot.command("searchdone", async (ctx) => {
     const query = extractArg(ctx.message?.text);
     if (!query) {
-      await ctx.reply("Укажи запрос, например:\n/searchdone Camry 2006\nИщу только состоявшиеся торги, фото и цену продажи из выписки.");
+      await ctx.reply("Укажи запрос, например:\n/searchdone Hyundai\nСостоявшиеся торги по всем регионам, одной таблицей.");
       return;
     }
 
-    await ctx.reply(`Ищу состоявшиеся торги «${query}»… Может занять до минуты.`);
+    await ctx.reply(`Ищу состоявшиеся «${query}» по всем регионам…`);
     try {
-      const page = await searchTradesPage(query, { limit: 5, processStatuses: ["COMPLETED"] });
+      const page = await searchTradesPage(query, {
+        limit: 10,
+        processStatuses: ["COMPLETED"],
+        onlyAucDown: true,
+      });
       if (page.items.length === 0) {
         await ctx.reply("Среди состоявшихся торгов ничего не нашёл. Попробуй другое слово.");
         return;
       }
-      await ctx.reply(formatCompletedSearchHeader(query, page.items.length, page.total), {
-        parse_mode: "HTML",
-      });
+
+      const rows: CompletedTableRow[] = [];
       for (const item of page.items) {
         try {
-          await sendCompletedTrade(ctx, item);
+          const detail = await getTradeDetail(item.id);
+          const protocol = await loadProtocolResult(detail);
+          const start = protocol?.startPrice ?? item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
+          const sale = protocol?.salePrice ?? null;
+          const pct = sale != null && start ? Math.round((sale / start) * 1000) / 10 : null;
+          rows.push({ item, start, sale, pct });
         } catch (error) {
           console.error(error);
-          await ctx.reply(`Не разобрал торг ${item.id}. Открой вручную: ${tradePublicUrl(item.id)}`);
+          rows.push({ item, start: item.initialContractPrice, sale: null, pct: null });
         }
       }
-      if (page.total > page.items.length) {
-        await ctx.reply(`Это первые ${page.items.length} из ${page.total}. Уточни модель/год, если нужно сузить.`);
-      }
+
+      await ctx.reply(formatCompletedTable(query, rows, page.total), {
+        parse_mode: "HTML",
+        link_preview_options: { is_disabled: true },
+      });
     } catch (error) {
       console.error(error);
       await ctx.reply("Не удалось получить состоявшиеся торги. Попробуй позже.");

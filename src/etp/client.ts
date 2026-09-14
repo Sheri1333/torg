@@ -24,6 +24,8 @@ export type TradeSearchQuery = {
   fullTextString?: string;
   processStatuses?: string[];
   orderBy?: string;
+  destinationRegions?: string[];
+  procurementClassifier?: string[];
 };
 
 async function getJson<T>(path: string, timeoutMs = 20_000): Promise<T> {
@@ -53,8 +55,8 @@ function siteSearchPayload(search: TradeSearchQuery): Record<string, unknown> {
       price: {},
       publishDate: {},
       tradeDate: {},
-      procurementClassifier: [],
-      destinationRegions: [],
+      procurementClassifier: search.procurementClassifier ?? [],
+      destinationRegions: search.destinationRegions ?? [],
     },
     orderBy: search.orderBy ?? "REGISTERED_DATE_DESC",
   };
@@ -159,33 +161,62 @@ async function searchTradesClientScan(
   return matched.slice(0, limit);
 }
 
-export async function searchTrades(
-  query: string,
-  options?: { limit?: number; maxPages?: number; processStatuses?: string[] },
-): Promise<TradeListItem[]> {
+export type SearchTradesOptions = {
+  limit?: number;
+  maxPages?: number;
+  processStatuses?: string[];
+  destinationRegions?: string[];
+  procurementClassifier?: string[];
+  onlyAucDown?: boolean;
+};
+
+export function isAucDown(item: TradeListItem): boolean {
+  return (item.lots ?? []).some((lot) => lot.methodAucDown === true);
+}
+
+export async function searchTrades(query: string, options?: SearchTradesOptions): Promise<TradeListItem[]> {
   const page = await searchTradesPage(query, options);
   return page.items;
 }
 
-export async function searchTradesPage(
-  query: string,
-  options?: { limit?: number; maxPages?: number; processStatuses?: string[] },
-): Promise<TradeListResponse> {
+export async function searchTradesPage(query: string, options?: SearchTradesOptions): Promise<TradeListResponse> {
   const limit = options?.limit ?? 10;
   const processStatuses = options?.processStatuses ?? ["BID_SUBMISSION"];
+  const search = {
+    fullTextString: query,
+    processStatuses,
+    destinationRegions: options?.destinationRegions,
+    procurementClassifier: options?.procurementClassifier,
+  };
+
   try {
-    return await listTrades({
-      skipped: 0,
-      limit,
-      search: {
-        fullTextString: query,
-        processStatuses,
-      },
-    });
+    if (!options?.onlyAucDown) {
+      return await listTrades({ skipped: 0, limit, search });
+    }
+
+    const pageSize = 20;
+    const maxPages = options.maxPages ?? 8;
+    const matched: TradeListItem[] = [];
+    const seen = new Set<number>();
+
+    for (let page = 0; page < maxPages && matched.length < limit; page += 1) {
+      const batch = await listTrades({ skipped: page * pageSize, limit: pageSize, search });
+      for (const item of batch.items) {
+        if (seen.has(item.id) || !isAucDown(item)) continue;
+        seen.add(item.id);
+        matched.push(item);
+        if (matched.length >= limit) break;
+      }
+      if (batch.items.length < pageSize) break;
+    }
+
+    return { items: matched, skipped: 0, limit, total: matched.length };
   } catch (error) {
     console.error("ETP server search failed, falling back to local scan", error);
-    const items = await searchTradesClientScan(query, options);
-    return { items, skipped: 0, limit, total: items.length };
+    const items = (await searchTradesClientScan(query, options)).filter((item) =>
+      options?.onlyAucDown ? isAucDown(item) : true,
+    );
+    return { items: items.slice(0, limit), skipped: 0, limit, total: items.length };
   }
 }
 
