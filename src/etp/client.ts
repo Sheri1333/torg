@@ -103,6 +103,7 @@ export async function listTrades(options?: {
   const page = options?.page ?? "sales";
   const params = new URLSearchParams({
     page,
+    skip: String(skipped),
     skipped: String(skipped),
     limit: String(limit),
   });
