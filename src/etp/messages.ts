@@ -101,23 +101,34 @@ function shortLotTitle(title: string): string {
 export function formatSearchTable(
   query: string,
   items: TradeListItem[],
-  options: { regionNote: string; page: number; offset: number; hasNext: boolean },
+  options: {
+    regionNote: string;
+    page: number;
+    skip: number;
+    etpCount: number;
+    etpTotal: number;
+    hasNext: boolean;
+  },
 ): string {
   const q = query.trim();
-  const from = options.offset + 1;
-  const to = options.offset + items.length;
   const lines = [
     q ? `<b>Поиск «${escapeHtml(q)}»</b>` : "<b>Свежие лоты</b>",
     `${escapeHtml(options.regionNote)} · приём заявок · только на понижение`,
-    `Страница ${options.page + 1} · лоты ${from}–${to}${options.hasNext ? " · дальше есть ещё" : " · это конец"}`,
+    `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${items.length} из ${options.etpCount} · всего ${options.etpTotal}`,
+    options.hasNext ? "Далее = следующие 20 лотов площадки." : "Это последняя страница площадки.",
     "Фото и карточка: /lot &lt;id&gt;",
     "",
   ];
 
+  if (items.length === 0) {
+    lines.push("На этой странице площадки нет лотов на понижение. Нажми Далее.");
+    return lines.join("\n").trim();
+  }
+
   items.forEach((item, i) => {
     const price = item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
     lines.push(
-      `${options.offset + i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
+      `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
       `   ${escapeHtml(item.region || "—")} · <b>${formatMoney(price)}</b>`,
       `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id}`,
       "",
@@ -137,16 +148,20 @@ export type CompletedTableRow = {
 export function formatCompletedTable(
   query: string,
   rows: CompletedTableRow[],
-  options: { page: number; offset: number; hasNext: boolean },
+  options: { page: number; skip: number; etpCount: number; etpTotal: number; hasNext: boolean },
 ): string {
-  const from = options.offset + 1;
-  const to = options.offset + rows.length;
   const lines = [
     `<b>Состоявшиеся «${escapeHtml(query)}»</b> · все регионы · только на понижение`,
-    `Страница ${options.page + 1} · лоты ${from}–${to}${options.hasNext ? " · дальше есть ещё" : " · это конец"}`,
+    `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${rows.length} из ${options.etpCount} · всего ${options.etpTotal}`,
+    options.hasNext ? "Далее = следующие 20 лотов площадки." : "Это последняя страница площадки.",
     "Фото и выписка: /lot &lt;id&gt;",
     "",
   ];
+
+  if (rows.length === 0) {
+    lines.push("На этой странице площадки нет лотов на понижение. Нажми Далее.");
+    return lines.join("\n").trim();
+  }
 
   rows.forEach((row, i) => {
     const { item, start, sale, pct } = row;
@@ -157,7 +172,7 @@ export function formatCompletedTable(
           ? `ушла <b>${formatMoney(sale)}</b>`
           : "цену в выписке не разобрал";
     lines.push(
-      `${options.offset + i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
+      `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
       `   ${escapeHtml(item.region || "—")} · старт ${formatMoney(start ?? item.initialContractPrice)} · ${saleLine}`,
       `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id}`,
       "",

@@ -1,19 +1,25 @@
 import { InlineKeyboard } from "grammy";
-import { collectAucDownLots } from "../etp/client.js";
+import { isAucDown, listTrades } from "../etp/client.js";
 import { ACTIVE_SEARCH_REGIONS } from "../etp/constants.js";
 import type { TradeListItem } from "../etp/types.js";
 
-export const SEARCH_PAGE_SIZE = 8;
+/** Same page size as the site: skip=0, skip=20, skip=40… */
+export const ETP_PAGE_SIZE = 20;
 
 export type SearchKind = "active" | "done";
+
+export type EtpPage = {
+  skip: number;
+  down: TradeListItem[];
+  etpCount: number;
+};
 
 export type PagedSearch = {
   kind: SearchKind;
   query: string;
   page: number;
-  items: TradeListItem[];
-  etpSkipped: number;
-  exhausted: boolean;
+  etpTotal: number;
+  pages: Array<EtpPage | undefined>;
 };
 
 const sessions = new Map<number, PagedSearch>();
@@ -30,39 +36,39 @@ export function pagerKeyboard(page: number, hasPrev: boolean, hasNext: boolean):
   return kb;
 }
 
-export function pageSlice(session: PagedSearch): TradeListItem[] {
-  const start = session.page * SEARCH_PAGE_SIZE;
-  return session.items.slice(start, start + SEARCH_PAGE_SIZE);
+export function currentPage(session: PagedSearch): EtpPage {
+  return session.pages[session.page] ?? { skip: session.page * ETP_PAGE_SIZE, down: [], etpCount: 0 };
 }
 
 export function pagerState(session: PagedSearch): { hasPrev: boolean; hasNext: boolean } {
-  const start = session.page * SEARCH_PAGE_SIZE;
+  const loaded = currentPage(session);
   const hasPrev = session.page > 0;
-  const hasNext = session.items.length > start + SEARCH_PAGE_SIZE || !session.exhausted;
+  const hasNext = loaded.skip + loaded.etpCount < session.etpTotal;
   return { hasPrev, hasNext };
 }
 
-async function ensureItems(session: PagedSearch, need: number): Promise<void> {
-  while (session.items.length < need && !session.exhausted) {
-    const want = need - session.items.length;
-    const got = await collectAucDownLots({
-      query: session.query,
+async function fetchEtpPage(session: PagedSearch, page: number): Promise<EtpPage> {
+  const cached = session.pages[page];
+  if (cached) return cached;
+
+  const skip = page * ETP_PAGE_SIZE;
+  const batch = await listTrades({
+    skipped: skip,
+    limit: ETP_PAGE_SIZE,
+    search: {
+      fullTextString: session.query,
       processStatuses: session.kind === "done" ? ["COMPLETED"] : ["BID_SUBMISSION"],
       destinationRegions: session.kind === "active" ? [...ACTIVE_SEARCH_REGIONS.ids] : undefined,
-      afterSkipped: session.etpSkipped,
-      want,
-      maxBatches: 25,
-    });
-    session.etpSkipped = got.nextSkipped;
-    session.exhausted = got.exhausted;
-    const known = new Set(session.items.map((item) => item.id));
-    for (const item of got.items) {
-      if (known.has(item.id)) continue;
-      known.add(item.id);
-      session.items.push(item);
-    }
-    if (got.items.length === 0) break;
-  }
+    },
+  });
+  session.etpTotal = batch.total;
+  const loaded: EtpPage = {
+    skip,
+    down: batch.items.filter(isAucDown),
+    etpCount: batch.items.length,
+  };
+  session.pages[page] = loaded;
+  return loaded;
 }
 
 export async function startPagedSearch(userId: number, kind: SearchKind, query: string): Promise<PagedSearch> {
@@ -70,11 +76,10 @@ export async function startPagedSearch(userId: number, kind: SearchKind, query: 
     kind,
     query,
     page: 0,
-    items: [],
-    etpSkipped: 0,
-    exhausted: false,
+    etpTotal: 0,
+    pages: [],
   };
-  await ensureItems(session, SEARCH_PAGE_SIZE);
+  await fetchEtpPage(session, 0);
   sessions.set(userId, session);
   return session;
 }
@@ -85,9 +90,10 @@ export async function turnSearchPage(userId: number, dir: -1 | 1): Promise<Paged
   const next = session.page + dir;
   if (next < 0) return session;
   if (dir > 0) {
-    await ensureItems(session, (next + 1) * SEARCH_PAGE_SIZE);
-    if (next * SEARCH_PAGE_SIZE >= session.items.length) return session;
+    const { hasNext } = pagerState(session);
+    if (!hasNext) return session;
   }
+  await fetchEtpPage(session, next);
   session.page = next;
   return session;
 }

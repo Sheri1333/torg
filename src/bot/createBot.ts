@@ -7,11 +7,10 @@ import { formatCompletedTable, formatSearchTable, type CompletedTableRow } from 
 import { escapeHtml } from "../etp/format.js";
 import { sendTradeDetailView } from "./sendMedia.js";
 import {
+  currentPage,
   getSearchSession,
-  pageSlice,
   pagerKeyboard,
   pagerState,
-  SEARCH_PAGE_SIZE,
   startPagedSearch,
   turnSearchPage,
   type PagedSearch,
@@ -53,21 +52,24 @@ async function enrichCompleted(items: TradeListItem[]): Promise<CompletedTableRo
 }
 
 async function renderPagedSearch(ctx: Context, session: PagedSearch, edit: boolean): Promise<void> {
-  const slice = pageSlice(session);
+  const loaded = currentPage(session);
   const { hasPrev, hasNext } = pagerState(session);
   const keyboard = pagerKeyboard(session.page, hasPrev, hasNext);
-  const offset = session.page * SEARCH_PAGE_SIZE;
   const html =
     session.kind === "active"
-      ? formatSearchTable(session.query, slice, {
+      ? formatSearchTable(session.query, loaded.down, {
           regionNote: ACTIVE_SEARCH_REGIONS.label,
           page: session.page,
-          offset,
+          skip: loaded.skip,
+          etpCount: loaded.etpCount,
+          etpTotal: session.etpTotal,
           hasNext,
         })
-      : formatCompletedTable(session.query, await enrichCompleted(slice), {
+      : formatCompletedTable(session.query, await enrichCompleted(loaded.down), {
           page: session.page,
-          offset,
+          skip: loaded.skip,
+          etpCount: loaded.etpCount,
+          etpTotal: session.etpTotal,
           hasNext,
         });
   const extra = { ...htmlOpts, reply_markup: keyboard };
@@ -151,7 +153,7 @@ export function createBot(token: string): Bot {
 
     try {
       const session = await startPagedSearch(uid, "active", query);
-      if (session.items.length === 0) {
+      if (session.etpTotal === 0) {
         await ctx.reply(
           query
             ? `В Астане и Павлодаре по «${query}» нет лотов на понижение (приём заявок).`
@@ -178,7 +180,7 @@ export function createBot(token: string): Bot {
     await ctx.reply(`Ищу состоявшиеся «${query}» по всем регионам…`);
     try {
       const session = await startPagedSearch(uid, "done", query);
-      if (session.items.length === 0) {
+      if (session.etpTotal === 0) {
         await ctx.reply("Среди состоявшихся торгов ничего не нашёл. Попробуй другое слово.");
         return;
       }

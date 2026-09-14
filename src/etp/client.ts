@@ -48,8 +48,7 @@ export function absoluteUrl(href: string | undefined): string | undefined {
 
 /** Same `search` JSON the site puts in /trades?page=sales&search=... */
 function siteSearchPayload(search: TradeSearchQuery): Record<string, unknown> {
-  return {
-    fullTextString: search.fullTextString?.trim() ?? "",
+  const payload: Record<string, unknown> = {
     processStatuses: search.processStatuses ?? ["BID_SUBMISSION"],
     conditions: {
       price: {},
@@ -60,6 +59,9 @@ function siteSearchPayload(search: TradeSearchQuery): Record<string, unknown> {
     },
     orderBy: search.orderBy ?? "REGISTERED_DATE_DESC",
   };
+  const query = search.fullTextString?.trim();
+  if (query) payload.fullTextString = query;
+  return payload;
 }
 
 function mapFileList(
@@ -108,7 +110,7 @@ export async function listTrades(options?: {
     params.set("search", JSON.stringify(siteSearchPayload(options.search)));
   }
 
-  const timeoutMs = options?.search?.fullTextString ? 60_000 : 25_000;
+  const timeoutMs = options?.search?.fullTextString?.trim() ? 45_000 : 20_000;
   const data = await getJson<{
     $top?: { trades?: TradeListResponse };
   }>(`/trades.json?${params.toString()}`, timeoutMs);
