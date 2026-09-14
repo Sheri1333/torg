@@ -116,7 +116,7 @@ export function formatSearchTable(
     `${escapeHtml(options.regionNote)} · приём заявок · только на понижение`,
     `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${items.length} из ${options.etpCount} · всего ${options.etpTotal}`,
     options.hasNext ? "Далее = следующие 20 лотов площадки." : "Это последняя страница площадки.",
-    "Фото и карточка: /lot &lt;id&gt;",
+    "Фото в боте: /lot &lt;id&gt; · ссылка ведёт на etp.adilet.gov.kz",
     "",
   ];
 
@@ -130,7 +130,7 @@ export function formatSearchTable(
     lines.push(
       `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
       `   ${escapeHtml(item.region || "—")} · <b>${formatMoney(price)}</b>`,
-      `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id}`,
+      `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id} · <a href="${tradePublicUrl(item.id)}">открыть на ETP</a>`,
       "",
     );
   });
@@ -154,7 +154,7 @@ export function formatCompletedTable(
     `<b>Состоявшиеся «${escapeHtml(query)}»</b> · все регионы · только на понижение`,
     `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${rows.length} из ${options.etpCount} · всего ${options.etpTotal}`,
     options.hasNext ? "Далее = следующие 20 лотов площадки." : "Это последняя страница площадки.",
-    "Фото и выписка: /lot &lt;id&gt;",
+    "Фото и выписка: /lot &lt;id&gt; · ссылка ведёт на etp.adilet.gov.kz",
     "",
   ];
 
@@ -174,7 +174,7 @@ export function formatCompletedTable(
     lines.push(
       `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
       `   ${escapeHtml(item.region || "—")} · старт ${formatMoney(start ?? item.initialContractPrice)} · ${saleLine}`,
-      `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id}`,
+      `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id} · <a href="${tradePublicUrl(item.id)}">открыть на ETP</a>`,
       "",
     );
   });
