@@ -174,6 +174,43 @@ export function isAucDown(item: TradeListItem): boolean {
   return (item.lots ?? []).some((lot) => lot.methodAucDown === true);
 }
 
+export async function collectAucDownLots(options: {
+  query: string;
+  processStatuses?: string[];
+  destinationRegions?: string[];
+  afterSkipped: number;
+  want: number;
+  maxBatches?: number;
+}): Promise<{ items: TradeListItem[]; nextSkipped: number; exhausted: boolean }> {
+  const pageSize = 20;
+  const maxBatches = options.maxBatches ?? 25;
+  const search = {
+    fullTextString: options.query,
+    processStatuses: options.processStatuses ?? ["BID_SUBMISSION"],
+    destinationRegions: options.destinationRegions,
+  };
+  const items: TradeListItem[] = [];
+  const seen = new Set<number>();
+  let skipped = options.afterSkipped;
+  let exhausted = false;
+  let batches = 0;
+
+  while (items.length < options.want && !exhausted && batches < maxBatches) {
+    const batch = await listTrades({ skipped, limit: pageSize, search });
+    batches += 1;
+    skipped += batch.items.length;
+    if (batch.items.length < pageSize) exhausted = true;
+    for (const item of batch.items) {
+      if (seen.has(item.id) || !isAucDown(item)) continue;
+      seen.add(item.id);
+      items.push(item);
+      if (items.length >= options.want) break;
+    }
+  }
+
+  return { items, nextSkipped: skipped, exhausted };
+}
+
 export async function searchTrades(query: string, options?: SearchTradesOptions): Promise<TradeListItem[]> {
   const page = await searchTradesPage(query, options);
   return page.items;

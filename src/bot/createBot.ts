@@ -1,11 +1,23 @@
 import { Bot, GrammyError, HttpError } from "grammy";
+import type { Context } from "grammy";
 import { config } from "../config.js";
 import { ETP_ADILET, ACTIVE_SEARCH_REGIONS } from "../etp/constants.js";
-import { getTradeDetail, loadProtocolResult, searchTradesPage, tradePublicUrl } from "../etp/client.js";
+import { getTradeDetail, loadProtocolResult, tradePublicUrl } from "../etp/client.js";
 import { formatCompletedTable, formatSearchTable, type CompletedTableRow } from "../etp/messages.js";
 import { escapeHtml } from "../etp/format.js";
 import { sendTradeDetailView } from "./sendMedia.js";
+import {
+  getSearchSession,
+  pageSlice,
+  pagerKeyboard,
+  pagerState,
+  SEARCH_PAGE_SIZE,
+  startPagedSearch,
+  turnSearchPage,
+  type PagedSearch,
+} from "./searchSession.js";
 import { addWatch, listWatched, removeWatch } from "../storage/watchlist.js";
+import type { TradeListItem } from "../etp/types.js";
 
 function extractArg(text: string | undefined): string {
   if (!text) return "";
@@ -18,6 +30,58 @@ function parseTradeId(input: string): string | null {
   if (fromUrl?.[1]) return fromUrl[1];
   const digits = input.replace(/\D/g, "");
   return digits || null;
+}
+
+const htmlOpts = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
+
+async function enrichCompleted(items: TradeListItem[]): Promise<CompletedTableRow[]> {
+  const rows: CompletedTableRow[] = [];
+  for (const item of items) {
+    try {
+      const detail = await getTradeDetail(item.id);
+      const protocol = await loadProtocolResult(detail);
+      const start = protocol?.startPrice ?? item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
+      const sale = protocol?.salePrice ?? null;
+      const pct = sale != null && start ? Math.round((sale / start) * 1000) / 10 : null;
+      rows.push({ item, start, sale, pct });
+    } catch (error) {
+      console.error(error);
+      rows.push({ item, start: item.initialContractPrice, sale: null, pct: null });
+    }
+  }
+  return rows;
+}
+
+async function renderPagedSearch(ctx: Context, session: PagedSearch, edit: boolean): Promise<void> {
+  const slice = pageSlice(session);
+  const { hasPrev, hasNext } = pagerState(session);
+  const keyboard = pagerKeyboard(session.page, hasPrev, hasNext);
+  const offset = session.page * SEARCH_PAGE_SIZE;
+  const html =
+    session.kind === "active"
+      ? formatSearchTable(session.query, slice, {
+          regionNote: ACTIVE_SEARCH_REGIONS.label,
+          page: session.page,
+          offset,
+          hasNext,
+        })
+      : formatCompletedTable(session.query, await enrichCompleted(slice), {
+          page: session.page,
+          offset,
+          hasNext,
+        });
+  const extra = { ...htmlOpts, reply_markup: keyboard };
+  if (edit) {
+    try {
+      await ctx.editMessageText(html, extra);
+    } catch (error) {
+      if (!(error instanceof GrammyError && /not modified/i.test(error.description))) {
+        throw error;
+      }
+    }
+    return;
+  }
+  await ctx.reply(html, extra);
 }
 
 export function createBot(token: string): Bot {
@@ -67,8 +131,8 @@ export function createBot(token: string): Bot {
         `Доступ: ${ETP_ADILET.needs}`,
         "",
         "Команды: /search hyundai, /searchdone Camry 2006, /lot, /watch.",
-        "/search — Астана и Павлодар, только на понижение, одной таблицей.",
-        "/searchdone — состоявшиеся, все регионы, только на понижение, одной таблицей.",
+        "/search — Астана и Павлодар, только на понижение, таблица с кнопкой Далее.",
+        "/searchdone — состоявшиеся, все регионы, только на понижение, тоже с пагинацией.",
         "/lot — фото и выписка по одному лоту.",
         "",
         "Важно: бот читает публичные данные площадки. Подача заявок и ЭЦП — только на сайте.",
@@ -81,15 +145,13 @@ export function createBot(token: string): Bot {
 
   bot.command("search", async (ctx) => {
     const query = extractArg(ctx.message?.text);
+    const uid = ctx.from?.id;
+    if (!uid) return;
     await ctx.reply(query ? `Ищу «${query}» в Астане и Павлодаре…` : "Загружаю лоты по Астане и Павлодару…");
 
     try {
-      const found = await searchTradesPage(query, {
-        limit: 12,
-        destinationRegions: [...ACTIVE_SEARCH_REGIONS.ids],
-        onlyAucDown: true,
-      });
-      if (found.items.length === 0) {
+      const session = await startPagedSearch(uid, "active", query);
+      if (session.items.length === 0) {
         await ctx.reply(
           query
             ? `В Астане и Павлодаре по «${query}» нет лотов на понижение (приём заявок).`
@@ -97,10 +159,7 @@ export function createBot(token: string): Bot {
         );
         return;
       }
-      await ctx.reply(formatSearchTable(query, found.items, found.total, ACTIVE_SEARCH_REGIONS.label), {
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-      });
+      await renderPagedSearch(ctx, session, false);
     } catch (error) {
       console.error(error);
       await ctx.reply("Не удалось получить список с ETP.Adilet. Попробуй позже.");
@@ -109,45 +168,50 @@ export function createBot(token: string): Bot {
 
   bot.command("searchdone", async (ctx) => {
     const query = extractArg(ctx.message?.text);
+    const uid = ctx.from?.id;
+    if (!uid) return;
     if (!query) {
-      await ctx.reply("Укажи запрос, например:\n/searchdone Hyundai\nСостоявшиеся торги по всем регионам, одной таблицей.");
+      await ctx.reply("Укажи запрос, например:\n/searchdone Hyundai\nСостоявшиеся торги по всем регионам, листать кнопкой Далее.");
       return;
     }
 
     await ctx.reply(`Ищу состоявшиеся «${query}» по всем регионам…`);
     try {
-      const page = await searchTradesPage(query, {
-        limit: 10,
-        processStatuses: ["COMPLETED"],
-        onlyAucDown: true,
-      });
-      if (page.items.length === 0) {
+      const session = await startPagedSearch(uid, "done", query);
+      if (session.items.length === 0) {
         await ctx.reply("Среди состоявшихся торгов ничего не нашёл. Попробуй другое слово.");
         return;
       }
-
-      const rows: CompletedTableRow[] = [];
-      for (const item of page.items) {
-        try {
-          const detail = await getTradeDetail(item.id);
-          const protocol = await loadProtocolResult(detail);
-          const start = protocol?.startPrice ?? item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
-          const sale = protocol?.salePrice ?? null;
-          const pct = sale != null && start ? Math.round((sale / start) * 1000) / 10 : null;
-          rows.push({ item, start, sale, pct });
-        } catch (error) {
-          console.error(error);
-          rows.push({ item, start: item.initialContractPrice, sale: null, pct: null });
-        }
-      }
-
-      await ctx.reply(formatCompletedTable(query, rows, page.total), {
-        parse_mode: "HTML",
-        link_preview_options: { is_disabled: true },
-      });
+      await renderPagedSearch(ctx, session, false);
     } catch (error) {
       console.error(error);
       await ctx.reply("Не удалось получить состоявшиеся торги. Попробуй позже.");
+    }
+  });
+
+  bot.callbackQuery("pg:noop", async (ctx) => {
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery(/^pg:(p|n)$/, async (ctx) => {
+    const uid = ctx.from?.id;
+    if (!uid) return;
+    if (!getSearchSession(uid)) {
+      await ctx.answerCallbackQuery({ text: "Запусти поиск заново: /search", show_alert: true });
+      return;
+    }
+    const dir = ctx.callbackQuery.data === "pg:n" ? 1 : -1;
+    await ctx.answerCallbackQuery({ text: dir > 0 ? "Следующая страница…" : "Назад" });
+    try {
+      const session = await turnSearchPage(uid, dir);
+      if (!session) {
+        await ctx.reply("Запусти поиск заново: /search");
+        return;
+      }
+      await renderPagedSearch(ctx, session, true);
+    } catch (error) {
+      console.error(error);
+      await ctx.reply("Не удалось открыть страницу. Попробуй /search ещё раз.");
     }
   });
 

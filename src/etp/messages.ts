@@ -101,14 +101,15 @@ function shortLotTitle(title: string): string {
 export function formatSearchTable(
   query: string,
   items: TradeListItem[],
-  total: number,
-  regionNote: string,
+  options: { regionNote: string; page: number; offset: number; hasNext: boolean },
 ): string {
   const q = query.trim();
+  const from = options.offset + 1;
+  const to = options.offset + items.length;
   const lines = [
     q ? `<b>Поиск «${escapeHtml(q)}»</b>` : "<b>Свежие лоты</b>",
-    `${escapeHtml(regionNote)} · приём заявок · только на понижение`,
-    `Показано ${items.length}`,
+    `${escapeHtml(options.regionNote)} · приём заявок · только на понижение`,
+    `Страница ${options.page + 1} · лоты ${from}–${to}${options.hasNext ? " · дальше есть ещё" : " · это конец"}`,
     "Фото и карточка: /lot &lt;id&gt;",
     "",
   ];
@@ -116,7 +117,7 @@ export function formatSearchTable(
   items.forEach((item, i) => {
     const price = item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
     lines.push(
-      `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
+      `${options.offset + i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
       `   ${escapeHtml(item.region || "—")} · <b>${formatMoney(price)}</b>`,
       `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id}`,
       "",
@@ -133,10 +134,16 @@ export type CompletedTableRow = {
   pct?: number | null;
 };
 
-export function formatCompletedTable(query: string, rows: CompletedTableRow[], total: number): string {
+export function formatCompletedTable(
+  query: string,
+  rows: CompletedTableRow[],
+  options: { page: number; offset: number; hasNext: boolean },
+): string {
+  const from = options.offset + 1;
+  const to = options.offset + rows.length;
   const lines = [
     `<b>Состоявшиеся «${escapeHtml(query)}»</b> · все регионы · только на понижение`,
-    `Показано ${rows.length}. Цена продажи — из выписки.`,
+    `Страница ${options.page + 1} · лоты ${from}–${to}${options.hasNext ? " · дальше есть ещё" : " · это конец"}`,
     "Фото и выписка: /lot &lt;id&gt;",
     "",
   ];
@@ -150,7 +157,7 @@ export function formatCompletedTable(query: string, rows: CompletedTableRow[], t
           ? `ушла <b>${formatMoney(sale)}</b>`
           : "цену в выписке не разобрал";
     lines.push(
-      `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
+      `${options.offset + i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
       `   ${escapeHtml(item.region || "—")} · старт ${formatMoney(start ?? item.initialContractPrice)} · ${saleLine}`,
       `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id}`,
       "",
