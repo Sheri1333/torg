@@ -143,6 +143,7 @@ export type CompletedTableRow = {
   start?: number;
   sale?: number | null;
   pct?: number | null;
+  pending?: boolean;
 };
 
 export function formatCompletedTable(
@@ -170,7 +171,9 @@ export function formatCompletedTable(
         ? `ушла <b>${formatMoney(sale)}</b> (${pct}% от старта)`
         : sale != null
           ? `ушла <b>${formatMoney(sale)}</b>`
-          : "цену в выписке не разобрал";
+          : row.pending
+            ? "читаю выписку…"
+            : "цену в выписке не разобрал";
     lines.push(
       `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
       `   ${escapeHtml(item.region || "—")} · старт ${formatMoney(start ?? item.initialContractPrice)} · ${saleLine}`,

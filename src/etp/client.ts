@@ -12,12 +12,15 @@ import type {
 
 const DEFAULT_HEADERS = {
   Accept: "application/json",
-  "User-Agent": "torg-bot/0.1 (+local; ETP.Adilet reader)",
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
   "X-Requested-With": "XMLHttpRequest",
+  Referer: "https://etp.adilet.gov.kz/trades?page=sales",
 };
 
 const FILE_HEADERS = {
-  "User-Agent": "torg-bot/0.1 (+local; ETP.Adilet reader)",
+  "User-Agent": DEFAULT_HEADERS["User-Agent"],
+  Referer: DEFAULT_HEADERS.Referer,
 };
 
 export type TradeSearchQuery = {
@@ -28,16 +31,29 @@ export type TradeSearchQuery = {
   procurementClassifier?: string[];
 };
 
-async function getJson<T>(path: string, timeoutMs = 20_000): Promise<T> {
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
+async function getJson<T>(path: string, timeoutMs = 20_000, attempts = 1): Promise<T> {
   const url = path.startsWith("http") ? path : `${config.etpBaseUrl}${path}`;
-  const res = await fetch(url, {
-    headers: DEFAULT_HEADERS,
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) {
-    throw new Error(`ETP request failed ${res.status} for ${url}`);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        headers: DEFAULT_HEADERS,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        throw new Error(`ETP request failed ${res.status} for ${url}`);
+      }
+      return (await res.json()) as T;
+    } catch (error) {
+      lastError = error;
+      if (!isTimeoutError(error) || attempt === attempts) throw error;
+    }
   }
-  return (await res.json()) as T;
+  throw lastError;
 }
 
 export function absoluteUrl(href: string | undefined): string | undefined {
@@ -107,14 +123,17 @@ export async function listTrades(options?: {
     skipped: String(skipped),
     limit: String(limit),
   });
+  let qs = params.toString();
   if (options?.search) {
-    params.set("search", JSON.stringify(siteSearchPayload(options.search)));
+    // URLSearchParams encodes spaces as `+`. ETP full-text search hangs on that
+    // (`camry+2006`) and never returns; encodeURIComponent keeps `%20`.
+    qs += `&search=${encodeURIComponent(JSON.stringify(siteSearchPayload(options.search)))}`;
   }
 
-  const timeoutMs = options?.search?.fullTextString?.trim() ? 45_000 : 20_000;
+  const hasText = Boolean(options?.search?.fullTextString?.trim());
   const data = await getJson<{
     $top?: { trades?: TradeListResponse };
-  }>(`/trades.json?${params.toString()}`, timeoutMs);
+  }>(`/trades.json?${qs}`, hasText ? 90_000 : 30_000, 2);
 
   const trades = data.$top?.trades;
   if (!trades) {

@@ -33,57 +33,109 @@ function parseTradeId(input: string): string | null {
 
 const htmlOpts = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 
+function stubCompletedRows(items: TradeListItem[]): CompletedTableRow[] {
+  return items.map((item) => ({
+    item,
+    start: item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice,
+    sale: null,
+    pct: null,
+    pending: true,
+  }));
+}
+
+async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      const item = items[index];
+      if (item === undefined) continue;
+      results[index] = await fn(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) || 1 }, () => worker()));
+  return results;
+}
+
 async function enrichCompleted(items: TradeListItem[]): Promise<CompletedTableRow[]> {
-  const rows: CompletedTableRow[] = [];
-  for (const item of items) {
+  if (items.length === 0) return [];
+  return mapPool(items, 4, async (item) => {
     try {
       const detail = await getTradeDetail(item.id);
       const protocol = await loadProtocolResult(detail);
       const start = protocol?.startPrice ?? item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
       const sale = protocol?.salePrice ?? null;
       const pct = sale != null && start ? Math.round((sale / start) * 1000) / 10 : null;
-      rows.push({ item, start, sale, pct });
+      return { item, start, sale, pct };
     } catch (error) {
       console.error(error);
-      rows.push({ item, start: item.initialContractPrice, sale: null, pct: null });
+      return { item, start: item.initialContractPrice, sale: null, pct: null };
     }
-  }
-  return rows;
+  });
 }
 
 async function renderPagedSearch(ctx: Context, session: PagedSearch, edit: boolean): Promise<void> {
   const loaded = currentPage(session);
   const { hasPrev, hasNext } = pagerState(session);
   const keyboard = pagerKeyboard(session.page, hasPrev, hasNext);
-  const html =
-    session.kind === "active"
-      ? formatSearchTable(session.query, loaded.down, {
-          regionNote: ACTIVE_SEARCH_REGIONS.label,
-          page: session.page,
-          skip: loaded.skip,
-          etpCount: loaded.etpCount,
-          etpTotal: session.etpTotal,
-          hasNext,
-        })
-      : formatCompletedTable(session.query, await enrichCompleted(loaded.down), {
-          page: session.page,
-          skip: loaded.skip,
-          etpCount: loaded.etpCount,
-          etpTotal: session.etpTotal,
-          hasNext,
-        });
   const extra = { ...htmlOpts, reply_markup: keyboard };
+  const tableOpts = {
+    page: session.page,
+    skip: loaded.skip,
+    etpCount: loaded.etpCount,
+    etpTotal: session.etpTotal,
+    hasNext,
+  };
+
+  if (session.kind === "active") {
+    const html = formatSearchTable(session.query, loaded.down, {
+      ...tableOpts,
+      regionNote: ACTIVE_SEARCH_REGIONS.label,
+    });
+    if (edit) {
+      try {
+        await ctx.editMessageText(html, extra);
+      } catch (error) {
+        if (!(error instanceof GrammyError && /not modified/i.test(error.description))) {
+          throw error;
+        }
+      }
+      return;
+    }
+    await ctx.reply(html, extra);
+    return;
+  }
+
+  const firstHtml = formatCompletedTable(session.query, stubCompletedRows(loaded.down), tableOpts);
+  let chatId: number | undefined;
+  let messageId: number | undefined;
   if (edit) {
     try {
-      await ctx.editMessageText(html, extra);
+      await ctx.editMessageText(firstHtml, extra);
     } catch (error) {
       if (!(error instanceof GrammyError && /not modified/i.test(error.description))) {
         throw error;
       }
     }
-    return;
+    chatId = ctx.chat?.id;
+    messageId = ctx.callbackQuery?.message?.message_id;
+  } else {
+    const sent = await ctx.reply(firstHtml, extra);
+    chatId = sent.chat.id;
+    messageId = sent.message_id;
   }
-  await ctx.reply(html, extra);
+
+  const rows = await enrichCompleted(loaded.down);
+  if (chatId == null || messageId == null) return;
+  try {
+    await ctx.api.editMessageText(chatId, messageId, formatCompletedTable(session.query, rows, tableOpts), extra);
+  } catch (error) {
+    if (!(error instanceof GrammyError && /not modified/i.test(error.description))) {
+      throw error;
+    }
+  }
 }
 
 export function createBot(token: string): Bot {
@@ -187,7 +239,7 @@ export function createBot(token: string): Bot {
       await renderPagedSearch(ctx, session, false);
     } catch (error) {
       console.error(error);
-      await ctx.reply("Не удалось получить состоявшиеся торги. Попробуй позже.");
+      await ctx.reply("Площадка ETP.Adilet сейчас не отвечает по состоявшимся торгам. Подожди минуту и напиши /searchdone ещё раз.");
     }
   });
 

@@ -27,3 +27,6 @@ export const ACTIVE_SEARCH_REGIONS = {
   ids: ["100806670", "100806587"],
   label: "г. Астана и Павлодарская область",
 } as const;
+
+/** Классификатор «легковые автомобили» на ETP.Adilet — сужает полный текст. */
+export const PASSENGER_CARS_CLASSIFIER_ID = "100806523";
