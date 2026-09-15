@@ -30,8 +30,9 @@ npm run probe -- 113333229
 |---|---|
 | `/start` | приветствие |
 | `/help` | справка по площадке |
-| `/search` | свежие лоты (статус «Приём заявок») |
-| `/search hyundai` | текстовый поиск по текущим лотам |
+| `/search` | свежие лоты: Астана и Павлодар, только на понижение |
+| `/search hyundai` | то же, с текстовым фильтром |
+| `/searchdone Camry 2006` | состоявшиеся, все регионы, на понижение, цена из выписки |
 | `/lot 113333229` | карточка торга по id или URL |
 | `/watch <id>` | в избранное |
 | `/watching` | список избранного |
@@ -44,7 +45,7 @@ https://etp.adilet.gov.kz/trades/113333229/info?page=sales
 
 Публичный JSON без авторизации:
 
-- список: `GET /trades.json?page=sales&skipped=0&limit=20`
+- список: `GET /trades.json?page=sales&skip=0&limit=20&search={...}`
 - карточка: `GET /trades/{id}/info?page=sales` с `Accept: application/json`
 
 Бот **не** подаёт заявки и **не** работает с ЭЦП — только мониторинг и удобный просмотр.

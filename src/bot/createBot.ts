@@ -87,6 +87,8 @@ async function renderPagedSearch(ctx: Context, session: PagedSearch, edit: boole
     etpCount: loaded.etpCount,
     etpTotal: session.etpTotal,
     hasNext,
+    filtered: session.extraNeedles.length > 0,
+    matchedCount: session.matched.length,
   };
 
   if (session.kind === "active") {
@@ -232,7 +234,7 @@ export function createBot(token: string): Bot {
     await ctx.reply(`Ищу состоявшиеся «${query}» по всем регионам…`);
     try {
       const session = await startPagedSearch(uid, "done", query);
-      if (session.etpTotal === 0) {
+      if (session.etpTotal === 0 || (session.extraNeedles.length > 0 && session.matched.length === 0 && session.exhausted)) {
         await ctx.reply("Среди состоявшихся торгов ничего не нашёл. Попробуй другое слово.");
         return;
       }

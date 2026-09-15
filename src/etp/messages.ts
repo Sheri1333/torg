@@ -149,18 +149,33 @@ export type CompletedTableRow = {
 export function formatCompletedTable(
   query: string,
   rows: CompletedTableRow[],
-  options: { page: number; skip: number; etpCount: number; etpTotal: number; hasNext: boolean },
+  options: {
+    page: number;
+    skip: number;
+    etpCount: number;
+    etpTotal: number;
+    hasNext: boolean;
+    matchedCount?: number;
+    filtered?: boolean;
+  },
 ): string {
+  const stats = options.filtered
+    ? `Страница ${options.page + 1} · показано ${rows.length} · нашёл ${options.matchedCount ?? rows.length} совпадений${options.hasNext ? "+" : ""}`
+    : `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${rows.length} из ${options.etpCount} · всего ${options.etpTotal}`;
   const lines = [
     `<b>Состоявшиеся «${escapeHtml(query)}»</b> · все регионы · только на понижение`,
-    `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${rows.length} из ${options.etpCount} · всего ${options.etpTotal}`,
-    options.hasNext ? "Далее = следующие 20 лотов площадки." : "Это последняя страница площадки.",
+    stats,
+    options.hasNext ? "Далее — следующая порция." : "Это последняя страница.",
     "Фото и выписка: /lot &lt;id&gt; · ссылка ведёт на etp.adilet.gov.kz",
     "",
   ];
 
   if (rows.length === 0) {
-    lines.push("На этой странице площадки нет лотов на понижение. Нажми Далее.");
+    lines.push(
+      options.hasNext
+        ? "На этом куске выдачи нет совпадений на понижение. Нажми Далее."
+        : "Совпадений на понижение не осталось.",
+    );
     return lines.join("\n").trim();
   }
 

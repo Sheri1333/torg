@@ -3,8 +3,12 @@ import { isAucDown, listTrades } from "../etp/client.js";
 import { ACTIVE_SEARCH_REGIONS, PASSENGER_CARS_CLASSIFIER_ID } from "../etp/constants.js";
 import type { TradeListItem } from "../etp/types.js";
 
-/** Same page size as the site: skip=0, skip=20, skip=40… */
+/** Site page size when we are not locally filtering extra tokens. */
 export const ETP_PAGE_SIZE = 20;
+/** Telegram rows per page when year/extra words are filtered locally. */
+export const DISPLAY_PAGE_SIZE = 8;
+const SCAN_PAGE_SIZE = 100;
+const MAX_SCAN_BATCHES = 8;
 
 export type SearchKind = "active" | "done";
 
@@ -22,6 +26,9 @@ export type PagedSearch = {
   page: number;
   etpTotal: number;
   pages: Array<EtpPage | undefined>;
+  matched: TradeListItem[];
+  scanSkip: number;
+  exhausted: boolean;
 };
 
 const YEAR_TOKEN = /^(19|20)\d{2}$/;
@@ -60,6 +67,10 @@ function looksLikeVehicleQuery(etpText: string, extraNeedles: string[]): boolean
   return extraNeedles.some((n) => YEAR_TOKEN.test(n)) && /^[a-z0-9-]+$/i.test(etpText.trim());
 }
 
+function usesLocalFilter(session: PagedSearch): boolean {
+  return session.extraNeedles.length > 0;
+}
+
 const sessions = new Map<number, PagedSearch>();
 
 export function getSearchSession(userId: number): PagedSearch | undefined {
@@ -75,40 +86,77 @@ export function pagerKeyboard(page: number, hasPrev: boolean, hasNext: boolean):
 }
 
 export function currentPage(session: PagedSearch): EtpPage {
+  if (usesLocalFilter(session)) {
+    const start = session.page * DISPLAY_PAGE_SIZE;
+    const down = session.matched.slice(start, start + DISPLAY_PAGE_SIZE);
+    return { skip: start, down, etpCount: down.length };
+  }
   return session.pages[session.page] ?? { skip: session.page * ETP_PAGE_SIZE, down: [], etpCount: 0 };
 }
 
 export function pagerState(session: PagedSearch): { hasPrev: boolean; hasNext: boolean } {
-  const loaded = currentPage(session);
   const hasPrev = session.page > 0;
-  const hasNext = loaded.skip + loaded.etpCount < session.etpTotal;
-  return { hasPrev, hasNext };
+  if (!usesLocalFilter(session)) {
+    const loaded = currentPage(session);
+    return { hasPrev, hasNext: loaded.skip + loaded.etpCount < session.etpTotal };
+  }
+  const filledThrough = (session.page + 1) * DISPLAY_PAGE_SIZE;
+  return { hasPrev, hasNext: session.matched.length > filledThrough || !session.exhausted };
+}
+
+function searchPayload(session: PagedSearch) {
+  const vehicle = looksLikeVehicleQuery(session.etpText, session.extraNeedles);
+  return {
+    fullTextString: session.etpText,
+    processStatuses: session.kind === "done" ? (["COMPLETED"] as string[]) : (["BID_SUBMISSION"] as string[]),
+    destinationRegions: session.kind === "active" ? [...ACTIVE_SEARCH_REGIONS.ids] : undefined,
+    procurementClassifier: vehicle ? [PASSENGER_CARS_CLASSIFIER_ID] : undefined,
+  };
+}
+
+async function ensureMatched(session: PagedSearch, needCount: number): Promise<void> {
+  let batches = 0;
+  while (session.matched.length < needCount && !session.exhausted && batches < MAX_SCAN_BATCHES) {
+    const batch = await listTrades({
+      skipped: session.scanSkip,
+      limit: SCAN_PAGE_SIZE,
+      search: searchPayload(session),
+    });
+    batches += 1;
+    session.etpTotal = batch.total;
+    session.scanSkip += batch.items.length;
+    if (batch.items.length < SCAN_PAGE_SIZE) session.exhausted = true;
+    for (const item of batch.items) {
+      if (!isAucDown(item) || !itemMatchesNeedles(item, session.extraNeedles)) continue;
+      session.matched.push(item);
+    }
+  }
 }
 
 async function fetchEtpPage(session: PagedSearch, page: number): Promise<EtpPage> {
   const cached = session.pages[page];
   if (cached) return cached;
 
-  const skip = page * ETP_PAGE_SIZE;
-  const vehicle = looksLikeVehicleQuery(session.etpText, session.extraNeedles);
-  const batch = await listTrades({
-    skipped: skip,
-    limit: ETP_PAGE_SIZE,
-    search: {
-      fullTextString: session.etpText,
-      processStatuses: session.kind === "done" ? ["COMPLETED"] : ["BID_SUBMISSION"],
-      destinationRegions: session.kind === "active" ? [...ACTIVE_SEARCH_REGIONS.ids] : undefined,
-      procurementClassifier: vehicle ? [PASSENGER_CARS_CLASSIFIER_ID] : undefined,
-    },
-  });
-  session.etpTotal = batch.total;
-  const loaded: EtpPage = {
-    skip,
-    down: batch.items.filter(isAucDown).filter((item) => itemMatchesNeedles(item, session.extraNeedles)),
-    etpCount: batch.items.length,
-  };
-  session.pages[page] = loaded;
-  return loaded;
+  if (!usesLocalFilter(session)) {
+    const skip = page * ETP_PAGE_SIZE;
+    const batch = await listTrades({
+      skipped: skip,
+      limit: ETP_PAGE_SIZE,
+      search: searchPayload(session),
+    });
+    session.etpTotal = batch.total;
+    const loaded: EtpPage = {
+      skip,
+      down: batch.items.filter(isAucDown),
+      etpCount: batch.items.length,
+    };
+    session.pages[page] = loaded;
+    return loaded;
+  }
+
+  const start = page * DISPLAY_PAGE_SIZE;
+  await ensureMatched(session, start + DISPLAY_PAGE_SIZE);
+  return currentPage({ ...session, page });
 }
 
 export async function startPagedSearch(userId: number, kind: SearchKind, query: string): Promise<PagedSearch> {
@@ -121,6 +169,9 @@ export async function startPagedSearch(userId: number, kind: SearchKind, query: 
     page: 0,
     etpTotal: 0,
     pages: [],
+    matched: [],
+    scanSkip: 0,
+    exhausted: false,
   };
   await fetchEtpPage(session, 0);
   sessions.set(userId, session);
