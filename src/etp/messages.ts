@@ -97,41 +97,73 @@ export function formatSearchHeader(query: string, count: number, totalHint?: num
 
 function formatDealCompact(deal: DealEstimate): string {
   const buy = deal.buyIsActual
-    ? `купили ${formatCompactMoney(deal.buyUsed)}`
-    : `теория купить ${formatCompactMoney(deal.buyTypical)} (пол ${formatCompactMoney(deal.buyFloor)})`;
-  return `   ${buy} · расходы ${formatCompactMoney(deal.extraCosts)} · выгода ~${formatCompactMoney(deal.profitTypical)} · ${verdictLabel(deal.verdict)}`;
+    ? `Купили: <b>${formatCompactMoney(deal.buyUsed)}</b>`
+    : `Купить: <b>${formatCompactMoney(deal.buyTypical)}</b>  ·  пол ${formatCompactMoney(deal.buyFloor)}`;
+  const profitWord = deal.profitTypical >= 0 ? "Выгода" : "Минус";
+  return [
+    buy,
+    `Расходы: ${formatCompactMoney(deal.extraCosts)}  ·  ремонт ${formatCompactMoney(deal.repair)}, эвакуатор ${formatCompactMoney(deal.evac)}, учёт ${formatCompactMoney(deal.registration)}`,
+    `${profitWord}: <b>${formatCompactMoney(deal.profitTypical)}</b>  ·  ${verdictLabel(deal.verdict)}`,
+  ].join("\n");
 }
 
 function formatDealDetail(deal: DealEstimate): string {
   const buyLine = deal.buyIsActual
     ? `Цена покупки (выписка): <b>${formatMoney(deal.buyUsed)}</b>`
     : [
-        `В теории купить (58% старта): <b>${formatMoney(deal.buyTypical)}</b>`,
-        `Пол понижения (50%): ${formatMoney(deal.buyFloor)} · медиана выборки (70%): ${formatMoney(deal.buyMedian)}`,
+        `Купить в теории (58%): <b>${formatMoney(deal.buyTypical)}</b>`,
+        `Пол (50%): ${formatMoney(deal.buyFloor)}  ·  медиана (70%): ${formatMoney(deal.buyMedian)}`,
       ].join("\n");
   const profitLabel = deal.profitTypical >= 0 ? "Выгода" : "Минус";
   return [
-    "<b>Оценка сделки</b> (не цена Kolesa)",
+    "<blockquote><b>Оценка сделки</b> · не цена Kolesa",
     buyLine,
-    `Взнос 5% сейчас: ${formatMoney(deal.deposit)} · доплата за 5 дней: ${formatMoney(deal.remainderTypical)}`,
-    `Ремонт ~${formatMoney(deal.repair)} · эвакуатор ${formatMoney(deal.evac)} · учёт ${formatMoney(deal.registration)}`,
-    `Расходы кроме цены лота: ${formatMoney(deal.extraCosts)}`,
-    `Осторожная перепродажа (90% оценки): ${formatMoney(deal.resale)}`,
-    `${profitLabel}: <b>${formatMoney(deal.profitTypical)}</b> · ${verdictLabel(deal.verdict)}`,
-    `Если взять на полу: ${formatMoney(deal.profitFloor)}`,
+    `Взнос 5%: ${formatMoney(deal.deposit)}  ·  доплата за 5 дней: ${formatMoney(deal.remainderTypical)}`,
+    `Ремонт ~${formatMoney(deal.repair)}  ·  эвакуатор ${formatMoney(deal.evac)}  ·  учёт ${formatMoney(deal.registration)}`,
+    `Расходы кроме цены: ${formatMoney(deal.extraCosts)}`,
+    `Продажа осторожно (90% оценки): ${formatMoney(deal.resale)}`,
+    `${profitLabel}: <b>${formatMoney(deal.profitTypical)}</b>  ·  ${verdictLabel(deal.verdict)}`,
+    `Если взять на полу: ${formatMoney(deal.profitFloor)}</blockquote>`,
   ].join("\n");
 }
 
 function shortLotTitle(title: string): string {
-  return truncate(
-    title
-      .replace(/\s+/g, " ")
-      .replace(/^Объект:\s*/i, "")
-      .replace(/^Автотранспортное\s+средство\s*/i, "")
-      .replace(/^Легковые автомобили,?\s*/i, "")
-      .trim(),
-    72,
-  );
+  let text = title
+    .replace(/\s+/g, " ")
+    .replace(/^Объект:\s*/i, "")
+    .replace(/^Автотранспортное\s+средство\s*/i, "")
+    .replace(/^Легковые автомобили,?\s*/i, "")
+    .trim();
+  text = text.split(/ состоящ/i)[0] ?? text;
+  text = text.split(/,\s*с кадастровым/i)[0] ?? text;
+  text = text.replace(/\s*\([^)]{24,}\)[^.]*$/, "").trim();
+  return truncate(text, 52);
+}
+
+function formatResultCard(options: {
+  index: number;
+  title: string;
+  region?: string;
+  registeredNumber: string;
+  id: number;
+  start?: number;
+  saleNote?: string;
+  deal: DealEstimate | null;
+}): string[] {
+  const money = options.deal ? formatDealCompact(options.deal) : "нет стартовой цены — оценку не посчитал";
+  return [
+    `<b>${options.index}. ${escapeHtml(shortLotTitle(options.title))}</b>`,
+    [
+      options.region ? escapeHtml(options.region) : null,
+      options.start != null ? `старт <b>${formatMoney(options.start)}</b>` : null,
+      options.saleNote,
+    ]
+      .filter(Boolean)
+      .join("  ·  "),
+    `<blockquote>${money}</blockquote>`,
+    `№ ${escapeHtml(options.registeredNumber)}  ·  /lot ${options.id}  ·  <a href="${tradePublicUrl(options.id)}">ETP</a>`,
+    "",
+  ];
 }
 
 const TELEGRAM_HTML_LIMIT = 3900;
@@ -161,30 +193,32 @@ export function formatSearchTable(
   },
 ): string {
   const q = query.trim();
+  const pageNo = options.page + 1;
   const lines = [
     q ? `<b>Поиск «${escapeHtml(q)}»</b>` : "<b>Свежие лоты</b>",
-    `${escapeHtml(options.regionNote)} · приём заявок · только на понижение`,
-    `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${items.length} из ${options.etpCount} · всего ${options.etpTotal}`,
-    options.hasNext ? "Далее = следующие 20 лотов площадки." : "Это последняя страница площадки.",
-    "Теория: купить ≈58% старта (пол 50%). Расходы = ремонт+эвакуатор+учёт. Выгода = продажа 90% оценки − покупка − расходы.",
-    "Это не цена Kolesa. Фото: /lot &lt;id&gt;",
+    `${escapeHtml(options.regionNote)}  ·  понижение  ·  стр. ${pageNo}`,
+    `на понижение ${items.length} из ${options.etpCount}  ·  всего ${options.etpTotal}${options.hasNext ? "  ·  есть ещё" : ""}`,
+    "<i>Купить ≈ 58% старта, пол 50%. Выгода = 90% оценки − покупка − ремонт/эвакуатор/учёт. Не Kolesa.</i>",
     "",
   ];
 
   if (items.length === 0) {
-    lines.push("На этой странице площадки нет лотов на понижение. Нажми Далее.");
+    lines.push("На этой странице нет лотов на понижение. Нажми Далее.");
     return lines.join("\n").trim();
   }
 
   items.forEach((item, i) => {
     const price = item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
-    const deal = estimateDeal({ start: price, region: item.region });
     lines.push(
-      `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
-      `   ${escapeHtml(item.region || "—")} · старт <b>${formatMoney(price)}</b>`,
-      deal ? formatDealCompact(deal) : "   нет стартовой цены — оценку не посчитал",
-      `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id} · <a href="${tradePublicUrl(item.id)}">открыть на ETP</a>`,
-      "",
+      ...formatResultCard({
+        index: i + 1,
+        title: item.title,
+        region: item.region,
+        registeredNumber: item.registeredNumber,
+        id: item.id,
+        start: price,
+        deal: estimateDeal({ start: price, region: item.region }),
+      }),
     );
   });
 
@@ -212,15 +246,14 @@ export function formatCompletedTable(
     filtered?: boolean;
   },
 ): string {
+  const pageNo = options.page + 1;
   const stats = options.filtered
-    ? `Страница ${options.page + 1} · показано ${rows.length} · нашёл ${options.matchedCount ?? rows.length} совпадений${options.hasNext ? "+" : ""}`
-    : `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${rows.length} из ${options.etpCount} · всего ${options.etpTotal}`;
+    ? `стр. ${pageNo}  ·  ${rows.length} лотов  ·  нашёл ${options.matchedCount ?? rows.length}${options.hasNext ? "+" : ""}`
+    : `стр. ${pageNo}  ·  на понижение ${rows.length} из ${options.etpCount}  ·  всего ${options.etpTotal}${options.hasNext ? "  ·  есть ещё" : ""}`;
   const lines = [
-    `<b>Состоявшиеся «${escapeHtml(query)}»</b> · все регионы · только на понижение`,
-    stats,
-    options.hasNext ? "Далее — следующая порция." : "Это последняя страница.",
-    "Выгода: продажа 90% оценки − цена из выписки − ремонт/эвакуатор/учёт.",
-    "Фото и выписка: /lot &lt;id&gt;",
+    `<b>Состоявшиеся «${escapeHtml(query)}»</b>`,
+    `все регионы  ·  понижение  ·  ${stats}`,
+    "<i>Выгода = 90% оценки − цена из выписки − ремонт/эвакуатор/учёт.</i>",
     "",
   ];
 
@@ -235,25 +268,26 @@ export function formatCompletedTable(
 
   rows.forEach((row, i) => {
     const { item, start, sale, pct } = row;
-    const saleLine =
+    const startPrice = start ?? item.initialContractPrice;
+    const saleNote =
       sale != null && pct != null
-        ? `ушла <b>${formatMoney(sale)}</b> (${pct}% от старта)`
+        ? `ушла <b>${formatCompactMoney(sale)}</b> (${pct}%)`
         : sale != null
-          ? `ушла <b>${formatMoney(sale)}</b>`
+          ? `ушла <b>${formatCompactMoney(sale)}</b>`
           : row.pending
             ? "читаю выписку…"
             : "цену в выписке не разобрал";
-    const startPrice = start ?? item.initialContractPrice;
-    const deal =
-      sale != null
-        ? estimateDeal({ start: startPrice, actualBuy: sale, region: item.region })
-        : null;
     lines.push(
-      `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
-      `   ${escapeHtml(item.region || "—")} · старт ${formatMoney(startPrice)} · ${saleLine}`,
-      ...(deal ? [formatDealCompact(deal)] : []),
-      `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id} · <a href="${tradePublicUrl(item.id)}">открыть на ETP</a>`,
-      "",
+      ...formatResultCard({
+        index: i + 1,
+        title: item.title,
+        region: item.region,
+        registeredNumber: item.registeredNumber,
+        id: item.id,
+        start: startPrice,
+        saleNote,
+        deal: estimateDeal({ start: startPrice, actualBuy: sale, region: item.region }),
+      }),
     );
   });
 
