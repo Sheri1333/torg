@@ -4,6 +4,23 @@ export function formatMoney(value: number | undefined | null, currency = "₸"):
   return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 }).format(n)} ${currency}`;
 }
 
+/** Compact money for table rows: 4,8 млн or 450 тыс. */
+export function formatCompactMoney(value: number | undefined | null): string {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  const n = Number(value);
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "−" : "";
+  if (abs >= 1_000_000) {
+    const mln = abs / 1_000_000;
+    const digits = mln >= 10 ? 1 : 2;
+    return `${sign}${mln.toLocaleString("ru-RU", { maximumFractionDigits: digits, minimumFractionDigits: 1 })} млн`;
+  }
+  if (abs >= 1000) {
+    return `${sign}${Math.round(abs / 1000).toLocaleString("ru-RU")} тыс.`;
+  }
+  return formatMoney(n);
+}
+
 export function formatDate(ms: number | undefined | null): string {
   if (!ms) return "—";
   return new Intl.DateTimeFormat("ru-RU", {

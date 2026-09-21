@@ -1,5 +1,6 @@
 import { ETP_ADILET } from "./constants.js";
-import { escapeHtml, formatDate, formatMoney, truncate } from "./format.js";
+import { estimateDeal, verdictLabel, type DealEstimate } from "./dealEstimate.js";
+import { escapeHtml, formatCompactMoney, formatDate, formatMoney, truncate } from "./format.js";
 import type { ProtocolResult, TradeDetail, TradeListItem } from "./types.js";
 import { tradePublicUrl } from "./client.js";
 
@@ -8,6 +9,7 @@ export function formatTradeCard(item: TradeListItem): string {
   const price = lot?.initialContractPrice ?? item.initialContractPrice;
   const categories = (item.procurementClassifiers ?? []).map((c) => c.title).join(", ");
 
+  const deal = estimateDeal({ start: price, region: item.region });
   return [
     `<b>${escapeHtml(truncate(item.title, 120))}</b>`,
     `№ <code>${escapeHtml(item.registeredNumber)}</code> · id <code>${item.id}</code>`,
@@ -19,6 +21,7 @@ export function formatTradeCard(item: TradeListItem): string {
     item.bidSubmissionEndDate ? `Приём заявок до: ${formatDate(item.bidSubmissionEndDate)}` : null,
     item.tradeStartDate ? `Старт торгов: ${formatDate(item.tradeStartDate)}` : null,
     item.timeToFinish ? `Осталось: ${escapeHtml(item.timeToFinish)}` : null,
+    deal ? formatDealDetail(deal) : null,
     `<a href="${tradePublicUrl(item.id)}">Открыть на ETP.Adilet</a>`,
   ]
     .filter(Boolean)
@@ -29,6 +32,11 @@ export function formatTradeDetail(detail: TradeDetail, protocol?: ProtocolResult
   const lot = detail.lots[0];
   const start = protocol?.startPrice ?? lot?.initialPrice;
   const sale = protocol?.salePrice;
+  const deal = estimateDeal({
+    start,
+    actualBuy: sale,
+    region: `${lot?.location ?? ""} ${detail.address ?? ""}`,
+  });
   let priceLines: string[] = [`Стартовая цена: <b>${formatMoney(start)}</b>`];
   if (sale != null && start) {
     const pct = ((sale / start) * 100).toFixed(1);
@@ -56,6 +64,7 @@ export function formatTradeDetail(detail: TradeDetail, protocol?: ProtocolResult
           escapeHtml(truncate(lot.title || lot.goodsDescription || "", 220)),
           lot.location ? `Место: ${escapeHtml(truncate(lot.location, 120))}` : null,
           ...priceLines,
+          deal ? formatDealDetail(deal) : null,
           protocol?.winner ? `Победитель: ${escapeHtml(protocol.winner)}` : null,
           protocol?.note ? escapeHtml(protocol.note) : null,
           lot.assurancePercent != null
@@ -86,6 +95,33 @@ export function formatSearchHeader(query: string, count: number, totalHint?: num
   return `Активные торги (приём заявок): показано ${count}`;
 }
 
+function formatDealCompact(deal: DealEstimate): string {
+  const buy = deal.buyIsActual
+    ? `купили ${formatCompactMoney(deal.buyUsed)}`
+    : `теория купить ${formatCompactMoney(deal.buyTypical)} (пол ${formatCompactMoney(deal.buyFloor)})`;
+  return `   ${buy} · расходы ${formatCompactMoney(deal.extraCosts)} · выгода ~${formatCompactMoney(deal.profitTypical)} · ${verdictLabel(deal.verdict)}`;
+}
+
+function formatDealDetail(deal: DealEstimate): string {
+  const buyLine = deal.buyIsActual
+    ? `Цена покупки (выписка): <b>${formatMoney(deal.buyUsed)}</b>`
+    : [
+        `В теории купить (58% старта): <b>${formatMoney(deal.buyTypical)}</b>`,
+        `Пол понижения (50%): ${formatMoney(deal.buyFloor)} · медиана выборки (70%): ${formatMoney(deal.buyMedian)}`,
+      ].join("\n");
+  const profitLabel = deal.profitTypical >= 0 ? "Выгода" : "Минус";
+  return [
+    "<b>Оценка сделки</b> (не цена Kolesa)",
+    buyLine,
+    `Взнос 5% сейчас: ${formatMoney(deal.deposit)} · доплата за 5 дней: ${formatMoney(deal.remainderTypical)}`,
+    `Ремонт ~${formatMoney(deal.repair)} · эвакуатор ${formatMoney(deal.evac)} · учёт ${formatMoney(deal.registration)}`,
+    `Расходы кроме цены лота: ${formatMoney(deal.extraCosts)}`,
+    `Осторожная перепродажа (90% оценки): ${formatMoney(deal.resale)}`,
+    `${profitLabel}: <b>${formatMoney(deal.profitTypical)}</b> · ${verdictLabel(deal.verdict)}`,
+    `Если взять на полу: ${formatMoney(deal.profitFloor)}`,
+  ].join("\n");
+}
+
 function shortLotTitle(title: string): string {
   return truncate(
     title
@@ -96,6 +132,20 @@ function shortLotTitle(title: string): string {
       .trim(),
     72,
   );
+}
+
+const TELEGRAM_HTML_LIMIT = 3900;
+
+function fitTelegramHtml(lines: string[]): string {
+  const copy = [...lines];
+  let text = copy.filter((line) => line !== "").join("\n").trim();
+  if (text.length <= TELEGRAM_HTML_LIMIT) return text;
+  const note = "…часть лотов скрыл — лимит Telegram. Жми Далее или /lot.";
+  while (copy.length > 10 && text.length + note.length + 1 > TELEGRAM_HTML_LIMIT) {
+    copy.pop();
+    text = copy.filter((line) => line !== "").join("\n").trim();
+  }
+  return `${text}\n${note}`.slice(0, 4096);
 }
 
 export function formatSearchTable(
@@ -116,7 +166,8 @@ export function formatSearchTable(
     `${escapeHtml(options.regionNote)} · приём заявок · только на понижение`,
     `Страница ${options.page + 1} (skip=${options.skip}) · на понижение ${items.length} из ${options.etpCount} · всего ${options.etpTotal}`,
     options.hasNext ? "Далее = следующие 20 лотов площадки." : "Это последняя страница площадки.",
-    "Фото в боте: /lot &lt;id&gt; · ссылка ведёт на etp.adilet.gov.kz",
+    "Теория: купить ≈58% старта (пол 50%). Расходы = ремонт+эвакуатор+учёт. Выгода = продажа 90% оценки − покупка − расходы.",
+    "Это не цена Kolesa. Фото: /lot &lt;id&gt;",
     "",
   ];
 
@@ -127,15 +178,17 @@ export function formatSearchTable(
 
   items.forEach((item, i) => {
     const price = item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
+    const deal = estimateDeal({ start: price, region: item.region });
     lines.push(
       `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
-      `   ${escapeHtml(item.region || "—")} · <b>${formatMoney(price)}</b>`,
+      `   ${escapeHtml(item.region || "—")} · старт <b>${formatMoney(price)}</b>`,
+      deal ? formatDealCompact(deal) : "   нет стартовой цены — оценку не посчитал",
       `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id} · <a href="${tradePublicUrl(item.id)}">открыть на ETP</a>`,
       "",
     );
   });
 
-  return lines.join("\n").trim();
+  return fitTelegramHtml(lines);
 }
 
 export type CompletedTableRow = {
@@ -166,7 +219,8 @@ export function formatCompletedTable(
     `<b>Состоявшиеся «${escapeHtml(query)}»</b> · все регионы · только на понижение`,
     stats,
     options.hasNext ? "Далее — следующая порция." : "Это последняя страница.",
-    "Фото и выписка: /lot &lt;id&gt; · ссылка ведёт на etp.adilet.gov.kz",
+    "Выгода: продажа 90% оценки − цена из выписки − ремонт/эвакуатор/учёт.",
+    "Фото и выписка: /lot &lt;id&gt;",
     "",
   ];
 
@@ -189,15 +243,21 @@ export function formatCompletedTable(
           : row.pending
             ? "читаю выписку…"
             : "цену в выписке не разобрал";
+    const startPrice = start ?? item.initialContractPrice;
+    const deal =
+      sale != null
+        ? estimateDeal({ start: startPrice, actualBuy: sale, region: item.region })
+        : null;
     lines.push(
       `${i + 1}. <b>${escapeHtml(shortLotTitle(item.title))}</b>`,
-      `   ${escapeHtml(item.region || "—")} · старт ${formatMoney(start ?? item.initialContractPrice)} · ${saleLine}`,
+      `   ${escapeHtml(item.region || "—")} · старт ${formatMoney(startPrice)} · ${saleLine}`,
+      ...(deal ? [formatDealCompact(deal)] : []),
       `   № ${escapeHtml(item.registeredNumber)} · /lot ${item.id} · <a href="${tradePublicUrl(item.id)}">открыть на ETP</a>`,
       "",
     );
   });
 
-  return lines.join("\n").trim();
+  return fitTelegramHtml(lines);
 }
 
 export function formatCompletedSearchHeader(query: string, shown: number, total: number): string {
@@ -217,6 +277,7 @@ export function formatCompletedCard(
   const start = protocol?.startPrice ?? lot?.initialContractPrice ?? item.initialContractPrice ?? detailLot?.initialPrice;
   const sale = protocol?.salePrice;
   const down = lot?.methodAucDown;
+  const deal = estimateDeal({ start, actualBuy: sale, region: item.region });
 
   let saleBlock: string;
   if (sale != null && start) {
@@ -252,6 +313,7 @@ export function formatCompletedCard(
     detailLot?.goodsDescription ? escapeHtml(truncate(detailLot.goodsDescription, 220)) : null,
     "",
     saleBlock,
+    deal ? formatDealDetail(deal) : null,
     protocol?.winner ? `Победитель: ${escapeHtml(protocol.winner)}` : null,
     protocol?.soldAt ? `Дата в выписке: ${escapeHtml(protocol.soldAt)}` : null,
     protocol?.note ? escapeHtml(protocol.note) : null,
