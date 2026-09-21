@@ -1,7 +1,7 @@
 import { Bot, GrammyError, HttpError } from "grammy";
 import type { Context } from "grammy";
 import { config } from "../config.js";
-import { ETP_ADILET, ACTIVE_SEARCH_REGIONS } from "../etp/constants.js";
+import { ETP_ADILET, SEARCH_CITIES, isSearchCityKey } from "../etp/constants.js";
 import { getTradeDetail, loadProtocolResult, tradePublicUrl } from "../etp/client.js";
 import { formatCompletedTable, formatSearchTable, type CompletedTableRow } from "../etp/messages.js";
 import { escapeHtml } from "../etp/format.js";
@@ -11,7 +11,10 @@ import {
   getSearchSession,
   pagerKeyboard,
   pagerState,
+  regionKeyboard,
+  setPendingActiveSearch,
   startPagedSearch,
+  takePendingActiveSearch,
   turnSearchPage,
   type PagedSearch,
 } from "./searchSession.js";
@@ -94,7 +97,7 @@ async function renderPagedSearch(ctx: Context, session: PagedSearch, edit: boole
   if (session.kind === "active") {
     const html = formatSearchTable(session.query, loaded.down, {
       ...tableOpts,
-      regionNote: ACTIVE_SEARCH_REGIONS.label,
+      regionNote: session.regionLabel,
     });
     if (edit) {
       try {
@@ -164,8 +167,8 @@ export function createBot(token: string): Bot {
         "Сейчас подключена только ETP.Adilet (арестантское имущество).",
         "",
         "Команды:",
-        "/search — свежие лоты (приём заявок)",
-        "/search hyundai — таблица: Астана и Павлодар, только на понижение",
+        "/search — свежие лоты: сначала выбери Астану или Павлодар",
+        "/search hyundai — то же, с текстовым фильтром",
         "/searchdone Camry 2006 — состоявшиеся, все регионы, только на понижение",
         "/lot 113333229 — фото, выписка и карточка одного торга",
         "/watch 113333229 — добавить в избранное",
@@ -187,7 +190,7 @@ export function createBot(token: string): Bot {
         `Доступ: ${ETP_ADILET.needs}`,
         "",
         "Команды: /search hyundai, /searchdone Camry 2006, /lot, /watch.",
-        "/search — Астана и Павлодар, только на понижение, таблица с кнопкой Далее.",
+        "/search — кнопка города: Астана, Павлодар или оба, только на понижение, таблица с кнопкой Далее.",
         "/searchdone — состоявшиеся, все регионы, только на понижение, тоже с пагинацией.",
         "/lot — фото и выписка по одному лоту.",
         "",
@@ -203,19 +206,37 @@ export function createBot(token: string): Bot {
     const query = extractArg(ctx.message?.text);
     const uid = ctx.from?.id;
     if (!uid) return;
-    await ctx.reply(query ? `Ищу «${query}» в Астане и Павлодаре…` : "Загружаю лоты по Астане и Павлодару…");
+    setPendingActiveSearch(uid, query);
+    const hint = query ? `«${query}»` : "свежие лоты";
+    await ctx.reply(`Где искать ${hint}? Только приём заявок, на понижение.`, {
+      reply_markup: regionKeyboard(),
+    });
+  });
 
+  bot.callbackQuery(/^rg:(astana|pavlodar|both)$/, async (ctx) => {
+    const uid = ctx.from?.id;
+    if (!uid) return;
+    const raw = ctx.callbackQuery.data ?? "";
+    const key = raw.slice(3);
+    if (!isSearchCityKey(key)) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const city = SEARCH_CITIES[key];
+    const query = takePendingActiveSearch(uid) ?? "";
+    await ctx.answerCallbackQuery({ text: city.button });
     try {
-      const session = await startPagedSearch(uid, "active", query);
+      await ctx.editMessageText(query ? `Ищу «${query}» · ${city.label}…` : `Загружаю лоты · ${city.label}…`);
+      const session = await startPagedSearch(uid, "active", query, key);
       if (session.etpTotal === 0) {
-        await ctx.reply(
+        await ctx.editMessageText(
           query
-            ? `В Астане и Павлодаре по «${query}» нет лотов на понижение (приём заявок).`
-            : "В Астане и Павлодаре сейчас нет лотов на понижение (приём заявок).",
+            ? `В регионе «${city.label}» по «${query}» нет лотов на понижение (приём заявок).`
+            : `В регионе «${city.label}» сейчас нет лотов на понижение (приём заявок).`,
         );
         return;
       }
-      await renderPagedSearch(ctx, session, false);
+      await renderPagedSearch(ctx, session, true);
     } catch (error) {
       console.error(error);
       await ctx.reply("Не удалось получить список с ETP.Adilet. Попробуй позже.");

@@ -1,6 +1,6 @@
 import { InlineKeyboard } from "grammy";
 import { isAucDown, listTrades } from "../etp/client.js";
-import { ACTIVE_SEARCH_REGIONS, PASSENGER_CARS_CLASSIFIER_ID } from "../etp/constants.js";
+import { PASSENGER_CARS_CLASSIFIER_ID, SEARCH_CITIES, type SearchCityKey } from "../etp/constants.js";
 import type { TradeListItem } from "../etp/types.js";
 
 /** Site page size when we are not locally filtering extra tokens. */
@@ -23,6 +23,9 @@ export type PagedSearch = {
   query: string;
   etpText: string;
   extraNeedles: string[];
+  cityKey?: SearchCityKey;
+  regionIds?: string[];
+  regionLabel: string;
   page: number;
   etpTotal: number;
   pages: Array<EtpPage | undefined>;
@@ -72,9 +75,28 @@ function usesLocalFilter(session: PagedSearch): boolean {
 }
 
 const sessions = new Map<number, PagedSearch>();
+const pendingActiveSearch = new Map<number, string>();
 
 export function getSearchSession(userId: number): PagedSearch | undefined {
   return sessions.get(userId);
+}
+
+export function setPendingActiveSearch(userId: number, query: string): void {
+  pendingActiveSearch.set(userId, query);
+}
+
+export function takePendingActiveSearch(userId: number): string | undefined {
+  const query = pendingActiveSearch.get(userId);
+  pendingActiveSearch.delete(userId);
+  return query;
+}
+
+export function regionKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text(SEARCH_CITIES.astana.button, "rg:astana")
+    .text(SEARCH_CITIES.pavlodar.button, "rg:pavlodar")
+    .row()
+    .text(SEARCH_CITIES.both.button, "rg:both");
 }
 
 export function pagerKeyboard(page: number, hasPrev: boolean, hasNext: boolean): InlineKeyboard {
@@ -109,7 +131,7 @@ function searchPayload(session: PagedSearch) {
   return {
     fullTextString: session.etpText,
     processStatuses: session.kind === "done" ? (["COMPLETED"] as string[]) : (["BID_SUBMISSION"] as string[]),
-    destinationRegions: session.kind === "active" ? [...ACTIVE_SEARCH_REGIONS.ids] : undefined,
+    destinationRegions: session.kind === "active" ? session.regionIds : undefined,
     procurementClassifier: vehicle ? [PASSENGER_CARS_CLASSIFIER_ID] : undefined,
   };
 }
@@ -159,13 +181,22 @@ async function fetchEtpPage(session: PagedSearch, page: number): Promise<EtpPage
   return currentPage({ ...session, page });
 }
 
-export async function startPagedSearch(userId: number, kind: SearchKind, query: string): Promise<PagedSearch> {
+export async function startPagedSearch(
+  userId: number,
+  kind: SearchKind,
+  query: string,
+  cityKey?: SearchCityKey,
+): Promise<PagedSearch> {
   const parsed = parseSearchQuery(query);
+  const city = kind === "active" ? SEARCH_CITIES[cityKey ?? "both"] : undefined;
   const session: PagedSearch = {
     kind,
     query,
     etpText: parsed.etpText,
     extraNeedles: parsed.extraNeedles,
+    cityKey: kind === "active" ? (cityKey ?? "both") : undefined,
+    regionIds: city ? [...city.ids] : undefined,
+    regionLabel: city?.label ?? "все регионы",
     page: 0,
     etpTotal: 0,
     pages: [],

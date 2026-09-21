@@ -22,11 +22,24 @@ export const TRADE_STATUSES = {
 
 export type TradeStatusCode = keyof typeof TRADE_STATUSES;
 
-/** /search: только эти регионы. /searchdone — все. */
-export const ACTIVE_SEARCH_REGIONS = {
-  ids: ["100806670", "100806587"],
-  label: "г. Астана и Павлодарская область",
+/** Города для /search. /searchdone — все регионы, без этого фильтра. */
+export const SEARCH_CITIES = {
+  astana: { ids: ["100806670"], label: "г. Астана", button: "Астана" },
+  pavlodar: { ids: ["100806587"], label: "Павлодарская область", button: "Павлодар" },
+  both: {
+    ids: ["100806670", "100806587"],
+    label: "г. Астана и Павлодарская область",
+    button: "Оба города",
+  },
 } as const;
+
+export type SearchCityKey = keyof typeof SEARCH_CITIES;
+
+export function isSearchCityKey(value: string): value is SearchCityKey {
+  return value === "astana" || value === "pavlodar" || value === "both";
+}
+
+export const ACTIVE_SEARCH_REGIONS = SEARCH_CITIES.both;
 
 /** Классификатор «легковые автомобили» на ETP.Adilet — сужает полный текст. */
 export const PASSENGER_CARS_CLASSIFIER_ID = "100806523";
