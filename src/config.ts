@@ -17,6 +17,7 @@ export const config = {
     .map(Number)
     .filter((n) => Number.isFinite(n)),
   etpBaseUrl: "https://etp.adilet.gov.kz",
+  saudaBaseUrl: "https://sauda.e-qazyna.kz",
   dataDir: new URL("../.data/", import.meta.url),
 };
 

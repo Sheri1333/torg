@@ -2,13 +2,14 @@
   "name": "torg-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Telegram-бот для работы с торгами ETP.Adilet (etp.adilet.gov.kz)",
+  "description": "Telegram-бот для торгов ETP.Adilet и Sauda (e-Qazyna)",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "probe": "tsx src/scripts/probe-etp.ts"
+    "probe": "tsx src/scripts/probe-etp.ts",
+    "probe:sauda": "tsx src/scripts/probe-sauda.ts"
   },
   "engines": {
     "node": ">=20"

@@ -1,8 +1,9 @@
-# TORG — Telegram-бот по торгам ETP.Adilet
+# TORG — Telegram-бот по торгам ETP.Adilet и Sauda
 
-Помощник для работы с публичными лотами на [etp.adilet.gov.kz](https://etp.adilet.gov.kz) (арестантское имущество, оператор РПЧСИ).
+Помощник для работы с публичными лотами:
 
-На этом этапе подключена **только** ETP.Adilet. Sauda (e-qazyna) — позже.
+- [etp.adilet.gov.kz](https://etp.adilet.gov.kz) — арестантское имущество, оператор РПЧСИ
+- [sauda.e-qazyna.kz](https://sauda.e-qazyna.kz) — торги e-Qazyna, приём заявок на понижение
 
 ## Бот
 
@@ -22,6 +23,7 @@ npm run dev
 ```bash
 npm run probe
 npm run probe -- 113333229
+npm run probe:sauda
 ```
 
 ## Команды бота
@@ -30,9 +32,11 @@ npm run probe -- 113333229
 |---|---|
 | `/start` | приветствие |
 | `/help` | справка по площадке |
-| `/search` | сначала кнопки: Астана / Павлодар / оба, затем лоты на понижение с оценкой покупки и выгоды |
+| `/search` | ETP.Adilet: сначала кнопки Астана / Павлодар / оба, затем лоты на понижение |
 | `/search hyundai` | то же, с текстовым фильтром |
-| `/searchdone Camry 2006` | состоявшиеся, все регионы, на понижение, цена из выписки |
+| `/sauda` | Sauda: те же города, приём заявок, только на понижение |
+| `/sauda camry` | то же, с текстовым фильтром |
+| `/searchdone Camry 2006` | состоявшиеся ETP, все регионы, на понижение, цена из выписки |
 | `/lot 113333229` | карточка торга по id или URL |
 | `/watch <id>` | в избранное |
 | `/watching` | список избранного |
@@ -41,12 +45,18 @@ npm run probe -- 113333229
 Пример карточки:  
 https://etp.adilet.gov.kz/trades/113333229/info?page=sales
 
-## Как читаем площадку
+## Как читаем площадки
 
-Публичный JSON без авторизации:
+ETP.Adilet — публичный JSON без авторизации:
 
 - список: `GET /trades.json?page=sales&skip=0&limit=20&search={...}`
 - карточка: `GET /trades/{id}/info?page=sales` с `Accept: application/json`
+
+Sauda — HTML-список (JSON `/ru/list/json` закрыт):
+
+- `GET /ru/list?searchStatus=ApplicationsAccept&auctionType=Auction_PriceDown17012021&p=1`
+- текстовый фильтр: `textRu=...`
+- регион площадка в GET игнорирует, бот отбирает Астану/Павлодар сам
 
 Бот **не** подаёт заявки и **не** работает с ЭЦП — только мониторинг и удобный просмотр.
 
@@ -78,5 +88,5 @@ sudo journalctl -u torg-bot -f
 ## Дальше
 
 - алерты по избранному (смена статуса / цены / дедлайна)
-- фильтры по региону, цене, категории
-- подключение Sauda (sauda.e-qazyna.kz)
+- фильтры по цене и категории
+- карточка лота Sauda (`/lot` по ссылке площадки)

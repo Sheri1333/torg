@@ -5,7 +5,7 @@ async function main() {
   const token = assertBotToken();
   const bot = createBot(token);
 
-  console.log("TORG bot starting (ETP.Adilet)…");
+  console.log("TORG bot starting (ETP.Adilet + Sauda)…");
   await bot.start({
     onStart: (info) => {
       console.log(`Logged in as @${info.username}`);

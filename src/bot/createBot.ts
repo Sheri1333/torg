@@ -5,6 +5,8 @@ import { ETP_ADILET, SEARCH_CITIES, isSearchCityKey } from "../etp/constants.js"
 import { getTradeDetail, loadProtocolResult, tradePublicUrl } from "../etp/client.js";
 import { formatCompletedTable, formatSearchTable, type CompletedTableRow } from "../etp/messages.js";
 import { escapeHtml } from "../etp/format.js";
+import { SAUDA } from "../sauda/constants.js";
+import { formatSaudaTable } from "../sauda/messages.js";
 import { sendTradeDetailView } from "./sendMedia.js";
 import {
   currentPage,
@@ -18,6 +20,18 @@ import {
   turnSearchPage,
   type PagedSearch,
 } from "./searchSession.js";
+import {
+  currentSaudaPage,
+  getSaudaSession,
+  saudaPagerKeyboard,
+  saudaPagerState,
+  saudaRegionKeyboard,
+  setPendingSaudaSearch,
+  startSaudaSearch,
+  takePendingSaudaSearch,
+  turnSaudaPage,
+  type SaudaSession,
+} from "./saudaSession.js";
 import { addWatch, listWatched, removeWatch } from "../storage/watchlist.js";
 import type { TradeListItem } from "../etp/types.js";
 
@@ -143,6 +157,33 @@ async function renderPagedSearch(ctx: Context, session: PagedSearch, edit: boole
   }
 }
 
+async function renderSaudaSearch(ctx: Context, session: SaudaSession, edit: boolean): Promise<void> {
+  const items = currentSaudaPage(session);
+  const { hasPrev, hasNext } = saudaPagerState(session);
+  const extra = {
+    ...htmlOpts,
+    reply_markup: saudaPagerKeyboard(session.page, hasPrev, hasNext),
+  };
+  const html = formatSaudaTable(session.query, items, {
+    regionNote: session.regionLabel,
+    page: session.page,
+    matchedCount: session.matched.length,
+    saudaTotal: session.totalFound,
+    hasNext,
+  });
+  if (edit) {
+    try {
+      await ctx.editMessageText(html, extra);
+    } catch (error) {
+      if (!(error instanceof GrammyError && /not modified/i.test(error.description))) {
+        throw error;
+      }
+    }
+    return;
+  }
+  await ctx.reply(html, extra);
+}
+
 export function createBot(token: string): Bot {
   const bot = new Bot(token);
 
@@ -159,17 +200,18 @@ export function createBot(token: string): Bot {
   bot.command("start", async (ctx) => {
     await ctx.reply(
       [
-        `Привет! Это бот по торгам <b>${ETP_ADILET.name}</b>.`,
+        `Привет! Это бот по торгам <b>${ETP_ADILET.name}</b> и <b>${SAUDA.name}</b>.`,
         "",
         `${ETP_ADILET.purpose}.`,
-        `Площадка: ${ETP_ADILET.url}`,
-        "",
-        "Сейчас подключена только ETP.Adilet (арестантское имущество).",
+        `ETP: ${ETP_ADILET.url}`,
+        `Sauda: ${SAUDA.url}`,
         "",
         "Команды:",
-        "/search — свежие лоты: сначала выбери Астану или Павлодар",
+        "/search — ETP.Adilet: сначала выбери Астану или Павлодар",
         "/search hyundai — то же, с текстовым фильтром",
-        "/searchdone Camry 2006 — состоявшиеся, все регионы, только на понижение",
+        "/sauda — Sauda (e-Qazyna): те же города, приём заявок, на понижение",
+        "/sauda camry — то же, с текстовым фильтром",
+        "/searchdone Camry 2006 — состоявшиеся ETP, все регионы, только на понижение",
         "/lot 113333229 — фото, выписка и карточка одного торга",
         "/watch 113333229 — добавить в избранное",
         "/watching — список избранного",
@@ -188,15 +230,20 @@ export function createBot(token: string): Bot {
         `Гарантийный взнос: ${ETP_ADILET.guaranteeTypical}`,
         ETP_ADILET.commission,
         `Доступ: ${ETP_ADILET.needs}`,
-        "",
-        "Команды: /search hyundai, /searchdone Camry 2006, /lot, /watch.",
-        "/search — кнопка города: Астана, Павлодар или оба, только на понижение, таблица с кнопкой Далее.",
-        "/searchdone — состоявшиеся, все регионы, только на понижение, тоже с пагинацией.",
-        "/lot — фото и выписка по одному лоту.",
-        "",
-        "Важно: бот читает публичные данные площадки. Подача заявок и ЭЦП — только на сайте.",
-        "",
         `Каталог: ${ETP_ADILET.tradesUrl}`,
+        "",
+        `<b>${SAUDA.name}</b>`,
+        `Оператор: ${SAUDA.operator}`,
+        `${SAUDA.purpose}.`,
+        `Каталог: ${SAUDA.listUrl}`,
+        "",
+        "Команды: /search hyundai, /sauda camry, /searchdone Camry 2006, /lot, /watch.",
+        "/search — ETP, кнопка города, только на понижение, таблица с кнопкой Далее.",
+        "/sauda — Sauda, те же города, приём заявок, на понижение.",
+        "/searchdone — состоявшиеся ETP, все регионы, только на понижение.",
+        "/lot — фото и выписка по одному лоту ETP.",
+        "",
+        "Важно: бот читает публичные данные площадок. Подача заявок и ЭЦП — только на сайте.",
       ].join("\n"),
       { parse_mode: "HTML", link_preview_options: { is_disabled: true } },
     );
@@ -211,6 +258,83 @@ export function createBot(token: string): Bot {
     await ctx.reply(`Где искать ${hint}? Только приём заявок, на понижение.`, {
       reply_markup: regionKeyboard(),
     });
+  });
+
+  bot.command("sauda", async (ctx) => {
+    const query = extractArg(ctx.message?.text);
+    const uid = ctx.from?.id;
+    if (!uid) return;
+    setPendingSaudaSearch(uid, query);
+    const hint = query ? `«${query}»` : "свежие лоты";
+    await ctx.reply(`Sauda: где искать ${hint}? Только приём заявок, на понижение.`, {
+      reply_markup: saudaRegionKeyboard(),
+    });
+  });
+
+  bot.callbackQuery(/^sg:(astana|pavlodar|both)$/, async (ctx) => {
+    const uid = ctx.from?.id;
+    if (!uid) return;
+    const raw = ctx.callbackQuery.data ?? "";
+    const key = raw.slice(3);
+    if (!isSearchCityKey(key)) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const city = SEARCH_CITIES[key];
+    const query = takePendingSaudaSearch(uid) ?? "";
+    await ctx.answerCallbackQuery({ text: city.button });
+    try {
+      await ctx.editMessageText(
+        query ? `Ищу на Sauda «${query}» · ${city.label}…` : `Загружаю Sauda · ${city.label}…`,
+      );
+      const session = await startSaudaSearch(uid, query, key);
+      if (session.totalFound === 0) {
+        await ctx.editMessageText(
+          query
+            ? `На Sauda по «${query}» сейчас нет лотов на понижение (приём заявок).`
+            : "На Sauda сейчас нет лотов на понижение (приём заявок).",
+        );
+        return;
+      }
+      if (session.matched.length === 0 && session.exhausted) {
+        await ctx.editMessageText(
+          query
+            ? `В регионе «${city.label}» на Sauda по «${query}» нет лотов на понижение.`
+            : `В регионе «${city.label}» на Sauda сейчас нет лотов на понижение.`,
+        );
+        return;
+      }
+      await renderSaudaSearch(ctx, session, true);
+    } catch (error) {
+      console.error(error);
+      await ctx.reply("Не удалось получить список с Sauda. Попробуй позже.");
+    }
+  });
+
+  bot.callbackQuery("sg:noop", async (ctx) => {
+    await ctx.answerCallbackQuery();
+  });
+
+  bot.callbackQuery(/^sg:(p|n)$/, async (ctx) => {
+    const uid = ctx.from?.id;
+    if (!uid) return;
+    if (!getSaudaSession(uid)) {
+      await ctx.answerCallbackQuery({ text: "Запусти поиск заново: /sauda", show_alert: true });
+      return;
+    }
+    const dir = ctx.callbackQuery.data === "sg:n" ? 1 : -1;
+    await ctx.answerCallbackQuery({ text: dir > 0 ? "Следующая страница…" : "Назад" });
+    try {
+      const session = await turnSaudaPage(uid, dir);
+      if (!session) {
+        await ctx.reply("Запусти поиск заново: /sauda");
+        return;
+      }
+      await renderSaudaSearch(ctx, session, true);
+    } catch (error) {
+      console.error(error);
+      await ctx.reply("Не удалось открыть страницу Sauda. Попробуй /sauda ещё раз.");
+    }
   });
 
   bot.callbackQuery(/^rg:(astana|pavlodar|both)$/, async (ctx) => {
