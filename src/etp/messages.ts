@@ -197,8 +197,7 @@ export function formatSearchTable(
   const lines = [
     q ? `<b>Поиск «${escapeHtml(q)}»</b>` : "<b>Свежие лоты</b>",
     `${escapeHtml(options.regionNote)}  ·  понижение  ·  стр. ${pageNo}`,
-    `на понижение ${items.length} из ${options.etpCount}  ·  всего ${options.etpTotal}${options.hasNext ? "  ·  есть ещё" : ""}`,
-    "<i>Купить ≈ 58% старта, пол 50%. Выгода = 90% оценки − покупка − ремонт/эвакуатор/учёт. Не Kolesa.</i>",
+    `${items.length} из ${options.etpCount}  ·  всего ${options.etpTotal}${options.hasNext ? "  ·  есть ещё" : ""}`,
     "",
   ];
 
@@ -208,17 +207,21 @@ export function formatSearchTable(
   }
 
   items.forEach((item, i) => {
-    const price = item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
+    const start = item.lots?.[0]?.initialContractPrice ?? item.initialContractPrice;
+    const floor = start != null ? Math.round(start * 0.5) : null;
+    const when = item.tradeStartDate
+      ? `аукцион ${formatDate(item.tradeStartDate)}`
+      : item.bidSubmissionEndDate
+        ? `приём до ${formatDate(item.bidSubmissionEndDate)}`
+        : item.timeToFinish
+          ? `осталось ${escapeHtml(item.timeToFinish)}`
+          : "время аукциона не указано";
     lines.push(
-      ...formatResultCard({
-        index: i + 1,
-        title: item.title,
-        region: item.region,
-        registeredNumber: item.registeredNumber,
-        id: item.id,
-        start: price,
-        deal: estimateDeal({ start: price, region: item.region }),
-      }),
+      `<b>${i + 1}. ${escapeHtml(shortLotTitle(item.title))}</b>`,
+      start != null ? `старт <b>${formatMoney(start)}</b>  ·  пол 50% <b>${formatMoney(floor)}</b>` : "цены нет",
+      when,
+      `<a href="${tradePublicUrl(item.id)}">открыть на ETP</a>`,
+      "",
     );
   });
 
